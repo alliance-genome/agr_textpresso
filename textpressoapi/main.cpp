@@ -22,6 +22,7 @@ bool is_token_valid(const string& db_path, const string& token) {
         return query.hasRow();
     } catch (std::exception& e) {
         std::cout << "exception: " << e.what() << std::endl;
+        return false;
     }
 }
 
@@ -38,6 +39,7 @@ bool is_superuser(const string& db_path, const string& token) {
         }
     } catch (std::exception& e) {
         std::cout << "exception: " << e.what() << std::endl;
+        return false;
     }
 }
 
@@ -142,8 +144,8 @@ int main(int argc, const char* argv[]) {
                 ("help,h", "produce help message")
                 ("index,i", po::value<string>(&index_path)->default_value("/usr/local/textpresso/luceneindex"),
                 "textpresso index")
-                ("login-database,d", po::value<string>(&login_database)->required(),
-                "database for logins and tokens")
+                ("login-database,d", po::value<string>(&login_database)->default_value(""),
+                "database for logins and tokens (optional, authentication disabled if not provided)")
                 ("ssl_cert,c", po::value<string>(&ssl_cert)->default_value(""),
                 "ssl certificate file")
                 ("ssl_key,k", po::value<string>(&ssl_key)->default_value(""),
@@ -174,12 +176,6 @@ int main(int argc, const char* argv[]) {
                 auto json_req = crow::json::load(req.body);
                 if (!json_req)
                     return crow::response(400);
-                    if (!json_req.has("token")) {
-                        return crow::response(401);
-                    }
-                if (!is_token_valid(login_database, json_req["token"].s())) {
-                    return crow::response(401);
-                }
                 int64_t since_num(0);
                 int64_t count(200);
                 if (json_req.has("since_num"))
@@ -190,11 +186,7 @@ int main(int argc, const char* argv[]) {
                             bool include_match_sentences(false);
                             bool include_all_sentences(false);
                         if (json_req.has("include_fulltext")) {
-                            if (is_superuser(login_database, json_req["token"].s())) {
-                                include_text = json_req["include_fulltext"].b();
-                            } else {
-                                return crow::response(401);
-                            }
+                            include_text = json_req["include_fulltext"].b();
                         }
                 tpc::index::Query query;
                 try {
@@ -213,12 +205,8 @@ int main(int argc, const char* argv[]) {
                 }
                 set<string> include_all_sentence_fields = {};
                 if (json_req.has("include_all_sentences")) {
-                    if (is_superuser(login_database, json_req["token"].s())) {
-                        include_all_sentences = json_req["include_all_sentences"].b();
-                                include_all_sentence_fields = {"sentence_compressed", "begin"};
-                    } else {
-                        return crow::response(401);
-                    }
+                    include_all_sentences = json_req["include_all_sentences"].b();
+                    include_all_sentence_fields = {"sentence_compressed", "begin"};
                 }
                 // call textpresso library
                 SearchResults results = indexManager.search_documents(query);
@@ -291,12 +279,6 @@ int main(int argc, const char* argv[]) {
                 auto json_req = crow::json::load(req.body);
                 if (!json_req)
                     return crow::response(400);
-                    if (!json_req.has("token")) {
-                        return crow::response(400);
-                    }
-                if (!is_token_valid(login_database, json_req["token"].s())) {
-                    return crow::response(401);
-                }
                 tpc::index::Query query;
                 try {
                     query = get_query(json_req, indexManager);
@@ -318,12 +300,6 @@ int main(int argc, const char* argv[]) {
                 auto json_req = crow::json::load(req.body);
                 if (!json_req)
                     return crow::response(400);
-                    if (!json_req.has("token")) {
-                        return crow::response(400);
-                    }
-                if (!is_token_valid(login_database, json_req["token"].s())) {
-                    return crow::response(401);
-                }
                 int64_t since_num(0);
                 int64_t count(10000000);
                 if (json_req.has("since_num"))
