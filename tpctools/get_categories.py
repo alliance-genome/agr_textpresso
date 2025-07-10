@@ -38,7 +38,7 @@ elif mod == 'wb':
     id_prefix = 'ce'
     species_name = "C. elegans"
 
-params = {"searchFilters":{"dataProviderFilter":{"dataProvider.sourceOrganization.abbreviation":{"queryString":mod,"tokenOperator":"OR"}}},"sortOrders":[],"aggregations":[],"nonNullFieldsTable":[]}
+params = {"searchFilters":{"dataProviderFilter":{"dataProvider.abbreviation":{"queryString":mod,"tokenOperator":"OR"}}},"sortOrders":[],"aggregations":[],"nonNullFieldsTable":[]}
 
 ##Gene List Generation
 f = open(f"gene_list_{mod}.obo", "w")
