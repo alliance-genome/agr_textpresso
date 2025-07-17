@@ -8,7 +8,7 @@ import argparse
 from os import rename
 
 from get_sgd_specific_categories import create_obo_file
-from tpctools.utils.okta_utils import get_authentication_token, generate_headers
+from fastapi_okta.okta_utils import get_authentication_token, generate_headers
 
 API_URL = "https://curation.alliancegenome.org/api/"
 PAGE_LIMIT = 1000
