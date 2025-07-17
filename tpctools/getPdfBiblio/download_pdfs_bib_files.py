@@ -6,8 +6,7 @@ import gzip
 from datetime import datetime, timedelta
 from os import environ, path, remove, makedirs
 
-from tpctools.utils import okta_utils
-# from ..utils import email_utils
+from fastapi_okta.okta_utils import get_authentication_token, generate_headers
 
 logging.basicConfig(format='%(message)s')
 logger = logging.getLogger(__name__)
@@ -24,8 +23,8 @@ default_data_path = environ['DATA_PATH']
 
 def download_files(mod, raw_file_path=None, days_ago=None, start_reference_id=None):
 
-    token = okta_utils.get_authentication_token()    
-    headers = okta_utils.generate_headers(token)
+    token = get_authentication_token()
+    headers = generate_headers(token)
 
     logger.info(headers)
 
