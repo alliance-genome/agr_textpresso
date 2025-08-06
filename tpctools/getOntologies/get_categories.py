@@ -250,8 +250,10 @@ def get_entity_name(entity_type, result, mod=None):
     elif entity_type == 'fish':
         if result['subtype']['name'] != 'fish':
             return None
-        return result['name']
-
+        if 'agmFullName' in result and 'displayText' in result['agmFullName']:
+            return result['agmFullName']['displayText']
+        return None
+ 
 
 def write_obo_file_header(f, tp_root_id, root_name, species_name, now):
     f.write("format-version: 1.2\n")
