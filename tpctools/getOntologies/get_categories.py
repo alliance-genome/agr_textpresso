@@ -15,6 +15,7 @@ from fastapi_okta.okta_utils import get_authentication_token, generate_headers
 API_URL = "https://curation.alliancegenome.org/api/"
 PAGE_LIMIT = 1000
 
+
 def get_category_data(mod, download_all=False):
 
     id_prefix, species_name, filename_id = get_id_prefix_species_name(mod)
@@ -42,8 +43,7 @@ def get_category_data(mod, download_all=False):
     if mod == 'WB':
         # generate_entity_list_from_a_team(mod, 'gene', params, id_prefix, species_name, filename_id, now, token, headers)
         # generate_entity_list_from_a_team(mod, 'gene_synonym', params, 's' + id_prefix, species_name, filename_id, now, token, headers)
-        generate_entity_list_from_a_team_api(mod, 'gene', id_prefix, species_name, filename_id, now,
-                                             generate_synonyms=True)
+        generate_entity_list_from_a_team_api(mod, 'gene', generate_synonyms=True)
         generate_entity_list_from_a_team(mod, 'protein', params, id_prefix, species_name, filename_id, now, token, headers)
         generate_entity_list_from_a_team(mod, 'protein_synonym', params, 's' + id_prefix, species_name, filename_id, now, token, headers)
         update_entity_list(mod, 'allele', params, id_prefix, species_name, filename_id, now, token, headers)
@@ -177,140 +177,184 @@ def read_entities(file_path):
 
 
 def get_name_from_entity(entity_symbol):
+    # Handle both object attributes and dictionary access
+    if entity_symbol is None:
+        return None
+    
+    # If it's a dictionary, extract the text
+    if isinstance(entity_symbol, dict):
+        if 'formatText' in entity_symbol:
+            return entity_symbol['formatText']
+        elif 'displayText' in entity_symbol:
+            return entity_symbol['displayText']
+    
+    # If it's an object, use attributes
     if hasattr(entity_symbol, 'format_text'):
-        entity_name = entity_symbol.format_text
+        return entity_symbol.format_text
     elif hasattr(entity_symbol, 'display_text'):
-        entity_name = entity_symbol.display_text
-    return entity_name
+        return entity_symbol.display_text
+    
+    return None
 
 
-def generate_entity_list_from_a_team_api(mod, entity_type, id_prefix, species_name, filename_id, now,
-                                         generate_synonyms=False):
+def generate_entity_list_from_a_team_api(mod: str, entity_type: str, generate_synonyms: bool = False) -> None:
     """
     Generate entity list files using AGRCurationAPIClient.
-    Processes both genes and gene synonyms in a single pass to avoid duplicate API calls.
+    
+    Args:
+        mod: Model organism database (e.g., 'WB', 'MGI')
+        entity_type: Type of entity to process ('gene', 'protein') 
+        generate_synonyms: Whether to also generate synonym files
     """
-    # Create API configuration and client
-    api_config = APIConfig()
-    api_client = AGRCurationAPIClient(api_config)
-
-    root_name = entity_type.capitalize()
-    synonym_root_name = entity_type.capitalize().replace("_synonym", " Synonym")
-
-    # Initialize file writers and counters
-    entity_file = None
-    synonym_file = None
-    records_printed = 0
-    synonym_records_printed = 0
-    found_synonyms = set()
+    id_prefix, species_name, filename_id = get_id_prefix_species_name(mod)
+    now = time.asctime()
     
-    # Setup gene file
-    if generate_synonyms:
-        entity_list_file = f"{entity_type}_{filename_id}.obo"
-        entity_file = open(entity_list_file, "w")
-        root_id = f"tpg{id_prefix}:0000000"
-        write_obo_file_header(entity_file, root_id, root_name, species_name, now)
+    api_client = _create_api_client()
     
-    # Setup synonym file
-    if generate_synonyms:
-        synonym_list_file = f"gene_synonym_{filename_id}.obo"
-        synonym_file = open(synonym_list_file, "w")
-        synonym_root_id = f"tpgs{id_prefix}:0000000"
-        write_obo_file_header(synonym_file, synonym_root_id, synonym_root_name, species_name, now)
+    # Process entities and optionally synonyms
+    entity_writer = _EntityFileWriter(entity_type, id_prefix, species_name, filename_id, now)
+    synonym_writer = _EntityFileWriter('gene_synonym', id_prefix, species_name, filename_id, now) if generate_synonyms else None
     
     try:
-        # Fetch genes using AGRCurationAPIClient
-        current_page = 0
-        
-        while True:
-            try:
-                entities = []
-                # Get genes from API client
-                if entity_type in ['gene', 'protein']:
-                    entities = api_client.get_genes(data_provider=mod, limit=PAGE_LIMIT, page=current_page)
-                
-                # Check if we got any results
-                if not entities or len(entities) == 0:
-                    break
-                
-                # Process each gene
-                for entity in entities:
-                    # Skip obsolete or internal genes
-                    if hasattr(entity, 'obsolete') and entity.obsolete:
-                        continue
-                    if hasattr(entity, 'internal') and entity.internal:
-                        continue
-                    
-                    # Process entity name
-                    entity_symbol = None
-                    if entity_type == 'gene':
-                        entity_symbol = entity.gene_symbol
-                    entity_name = get_name_from_entity(entity_symbol)
-
-                    if entity_name:
-                        # Apply MOD-specific formatting
-                        if mod == 'WB':
-                            if entity_type == 'gene':
-                                entity_name = entity_name.lower()
-                            elif entity_type == 'protein':
-                                entity_name = entity_name.upper()
-
-                        records_printed += 1
-                        tp_id = f"tpg{id_prefix}:{records_printed:07d}"
-                        entity_file.write(f"\n[Term]\nid: {tp_id}\nname: {entity_name}\n")
-                        entity_file.write(f"is_a: tpg{id_prefix}:0000000 ! {root_name} ({species_name})\n")
-
-                    # Process synonyms
-                    if generate_synonyms:
-                        synonyms = []
-                        if entity_type in ["gene", "protein"] and hasattr(entity, 'gene_synonyms'):
-                            synonyms = entity.gene_synonyms
-                        for synonym in synonyms:
-                            synonym_name = get_name_from_entity(synonym)
-                            
-                            # Skip if already processed or empty
-                            if not synonym_name or synonym_name in found_synonyms:
-                                continue
-                            
-                            found_synonyms.add(synonym_name)
-                            
-                            # Apply MOD-specific formatting
-                            # Apply MOD-specific formatting
-                            if mod == 'WB':
-                                if entity_type == 'gene':
-                                    entity_name = entity_name.lower()
-                                elif entity_type == 'protein':
-                                    entity_name = entity_name.upper()
-                            
-                            synonym_records_printed += 1
-                            tp_id = f"tpgs{id_prefix}:{synonym_records_printed:07d}"
-                            synonym_file.write(f"\n[Term]\nid: {tp_id}\nname: {synonym_name}\n")
-                            synonym_file.write(f"is_a: tpgs{id_prefix}:0000000 ! {synonym_root_name} ({species_name})\n")
-                
-                # Progress update
-                current_page += 1
-                print(f"Page {current_page}: Genes: {records_printed}, "
-                      f"Synonyms: {synonym_records_printed}")
-                
-                # If we got less than PAGE_LIMIT results, we've reached the end
-                if len(entities) < PAGE_LIMIT:
-                    break
-                    
-            except Exception as e:
-                print(f"Error fetching page {current_page}: {e}")
-                break
-        
-        # Print final statistics
-        print(f"Total {root_name} Records Written: {records_printed}")
-        if generate_synonyms:
-            print(f"Total {synonym_root_name} Records Written: {synonym_records_printed}")
-            
+        _process_entities_from_api(api_client, mod, entity_type, entity_writer, synonym_writer)
     finally:
-        # Ensure files are properly closed
-        if entity_file:
-            entity_file.close()
-        if synonym_file:
-            synonym_file.close()
+        entity_writer.close()
+        if synonym_writer:
+            synonym_writer.close()
+
+
+def _create_api_client() -> AGRCurationAPIClient:
+    """Create and return AGR API client."""
+    api_config = APIConfig()
+    return AGRCurationAPIClient(api_config)
+
+
+def _apply_mod_formatting(name: str, mod: str, entity_type: str) -> str:
+    """Apply MOD-specific name formatting."""
+    if mod == 'WB':
+        if entity_type == 'gene':
+            return name.lower()
+        elif entity_type == 'protein':
+            return name.upper()
+    return name
+
+
+def _process_entities_from_api(api_client: AGRCurationAPIClient, mod: str, entity_type: str, 
+                               entity_writer, synonym_writer) -> None:
+    """Process entities from API with pagination."""
+    current_page = 0
+    found_synonyms = set()
+    
+    while True:
+        try:
+            entities = _fetch_entities_page(api_client, mod, entity_type, current_page)
+            if not entities:
+                print(f"No entities returned for {entity_type} page {current_page}")
+                break
+                
+            for entity in entities:
+                if _should_skip_entity(entity):
+                    continue
+                    
+                _process_single_entity(entity, entity_type, mod, entity_writer, synonym_writer, found_synonyms)
+            
+            current_page += 1
+            print(f"Page {current_page}: Entities: {entity_writer.records_count}, "
+                  f"Synonyms: {synonym_writer.records_count if synonym_writer else 0}")
+            
+            if len(entities) < PAGE_LIMIT:
+                break
+                
+        except Exception as e:
+            print(f"Error fetching page {current_page}: {e}")
+            import traceback
+            traceback.print_exc()
+            break
+
+
+def _fetch_entities_page(api_client: AGRCurationAPIClient, mod: str, entity_type: str, page: int):
+    """Fetch a single page of entities from the API."""
+    if entity_type in ['gene', 'protein']:
+        return api_client.get_genes(data_provider=mod, limit=PAGE_LIMIT, page=page)
+    return []
+
+
+def _should_skip_entity(entity) -> bool:
+    """Check if entity should be skipped (obsolete or internal)."""
+    return ((hasattr(entity, 'obsolete') and entity.obsolete) or 
+            (hasattr(entity, 'internal') and entity.internal))
+
+
+def _process_single_entity(entity, entity_type: str, mod: str, entity_writer, synonym_writer, found_synonyms: set) -> None:
+    """Process a single entity and its synonyms."""
+    # Process main entity based on entity type
+    entity_symbol = None
+    
+    # Try different ways to access gene_symbol based on how API returns data
+    if entity_type in ['gene', 'protein']:
+        if hasattr(entity, 'gene_symbol'):
+            entity_symbol = entity.gene_symbol
+        elif hasattr(entity, '__dict__') and 'gene_symbol' in entity.__dict__:
+            entity_symbol = entity.__dict__['gene_symbol']
+    
+    entity_name = get_name_from_entity(entity_symbol)
+    
+    if entity_name:
+        formatted_name = _apply_mod_formatting(entity_name, mod, entity_type)
+        entity_writer.write_entity(formatted_name)
+    
+    # Process synonyms if requested
+    if synonym_writer:
+        synonyms = None
+        if hasattr(entity, 'gene_synonyms'):
+            synonyms = entity.gene_synonyms
+        elif hasattr(entity, '__dict__') and 'gene_synonyms' in entity.__dict__:
+            synonyms = entity.__dict__['gene_synonyms']
+            
+        if synonyms:
+            for synonym in synonyms:
+                synonym_name = get_name_from_entity(synonym)
+                if synonym_name and synonym_name not in found_synonyms:
+                    found_synonyms.add(synonym_name)
+                    formatted_synonym = _apply_mod_formatting(synonym_name, mod, entity_type)
+                    synonym_writer.write_entity(formatted_synonym)
+
+
+class _EntityFileWriter:
+    """Helper class to manage OBO file writing for entities."""
+    
+    def __init__(self, entity_type: str, id_prefix: str, species_name: str, filename_id: str, now: str):
+        self.entity_type = entity_type
+        self.id_prefix = id_prefix
+        self.species_name = species_name
+        self.records_count = 0
+        
+        # Determine file naming and ID prefixes
+        if entity_type == 'gene_synonym':
+            self.filename = f"gene_synonym_{filename_id}.obo"
+            self.tp_prefix = f"tpgs{id_prefix}"
+            self.root_name = "Gene Synonym"
+        else:
+            self.filename = f"{entity_type}_{filename_id}.obo"
+            self.tp_prefix = f"tpg{id_prefix}"
+            self.root_name = entity_type.capitalize()
+        
+        self.root_id = f"{self.tp_prefix}:0000000"
+        self.file_handle = open(self.filename, "w")
+        write_obo_file_header(self.file_handle, self.root_id, self.root_name, species_name, now)
+    
+    def write_entity(self, name: str) -> None:
+        """Write an entity to the OBO file."""
+        self.records_count += 1
+        tp_id = f"{self.tp_prefix}:{self.records_count:07d}"
+        self.file_handle.write(f"\n[Term]\nid: {tp_id}\nname: {name}\n")
+        self.file_handle.write(f"is_a: {self.root_id} ! {self.root_name} ({self.species_name})\n")
+    
+    def close(self) -> None:
+        """Close the file handle and print statistics."""
+        if self.file_handle:
+            self.file_handle.close()
+            print(f"Total {self.root_name} Records Written: {self.records_count}")
 
 
 def generate_entity_list_from_a_team(mod, entity_type, params, id_prefix, species_name, filename_id, now, token, headers):
