@@ -3,6 +3,8 @@ import json
 import time
 import re
 from datetime import datetime
+
+from agr_curation_api import APIConfig, AGRCurationAPIClient
 from dateutil.relativedelta import relativedelta
 import argparse
 from os import rename
@@ -38,8 +40,10 @@ def get_category_data(mod, download_all=False):
     }
 
     if mod == 'WB':
-        generate_entity_list_from_a_team(mod, 'gene', params, id_prefix, species_name, filename_id, now, token, headers)
-        generate_entity_list_from_a_team(mod, 'gene_synonym', params, 's' + id_prefix, species_name, filename_id, now, token, headers)
+        # generate_entity_list_from_a_team(mod, 'gene', params, id_prefix, species_name, filename_id, now, token, headers)
+        # generate_entity_list_from_a_team(mod, 'gene_synonym', params, 's' + id_prefix, species_name, filename_id, now, token, headers)
+        generate_entity_list_from_a_team_api(mod, 'gene', id_prefix, species_name, filename_id, now,
+                                             generate_synonyms=True)
         generate_entity_list_from_a_team(mod, 'protein', params, id_prefix, species_name, filename_id, now, token, headers)
         generate_entity_list_from_a_team(mod, 'protein_synonym', params, 's' + id_prefix, species_name, filename_id, now, token, headers)
         update_entity_list(mod, 'allele', params, id_prefix, species_name, filename_id, now, token, headers)
@@ -170,6 +174,137 @@ def read_entities(file_path):
     entity_dict = dict(zip(names, ids))
     max_id = max(int(id.split(':')[-1]) for id in ids)
     return entity_dict, max_id
+
+
+def generate_entity_list_from_a_team_api(mod, entity_type, id_prefix, species_name, filename_id, now,
+                                         generate_synonyms=False):
+    """
+    Generate entity list files using AGRCurationAPIClient.
+    Processes both genes and gene synonyms in a single pass to avoid duplicate API calls.
+    """
+    # Create API configuration and client
+    api_config = APIConfig()
+    api_client = AGRCurationAPIClient(api_config)
+
+    root_name = entity_type.capitalize()
+    synonym_root_name = entity_type.capitalize().replace("_synonym", " Synonym")
+
+    
+    # Initialize file writers and counters
+    entity_file = None
+    synonym_file = None
+    records_printed = 0
+    synonym_records_printed = 0
+    found_synonyms = set()
+    
+    # Setup gene file
+    if generate_synonyms:
+        entity_list_file = f"{entity_type}_{filename_id}.obo"
+        entity_file = open(entity_list_file, "w")
+        root_id = f"tpg{id_prefix}:0000000"
+        write_obo_file_header(entity_file, root_id, root_name, species_name, now)
+    
+    # Setup synonym file
+    if generate_synonyms:
+        synonym_list_file = f"gene_synonym_{filename_id}.obo"
+        synonym_file = open(synonym_list_file, "w")
+        synonym_root_id = f"tpgs{id_prefix}:0000000"
+        write_obo_file_header(synonym_file, synonym_root_id, synonym_root_name, species_name, now)
+    
+    try:
+        # Fetch genes using AGRCurationAPIClient
+        current_page = 0
+        
+        while True:
+            try:
+                entities = []
+                # Get genes from API client
+                if entity_type == 'gene':
+                    entities = api_client.get_genes(data_provider=mod, limit=PAGE_LIMIT, page=current_page)
+                
+                # Check if we got any results
+                if not entities or len(entities) == 0:
+                    break
+                
+                # Process each gene
+                for entity in entities:
+                    # Skip obsolete or internal genes
+                    if hasattr(entity, 'obsolete') and entity.obsolete:
+                        continue
+                    if hasattr(entity, 'internal') and entity.internal:
+                        continue
+                    
+                    # Process entity name
+                    entity_name = None
+                    entity_symbol = None
+                    if entity_type == 'gene':
+                        entity_symbol = entity.gene_symbol
+                    if hasattr(entity_symbol, 'format_text'):
+                        entity_name = entity_symbol.format_text
+                    elif hasattr(entity_symbol, 'display_text'):
+                        entity_name = entity_symbol.display_text
+
+                    if entity_name:
+                        # Apply MOD-specific formatting
+                        if mod == 'WB':
+                            gene_name = entity_name.lower()
+
+                        records_printed += 1
+                        tp_id = f"tpg{id_prefix}:{records_printed:07d}"
+                        entity_file.write(f"\n[Term]\nid: {tp_id}\nname: {entity_name}\n")
+                        entity_file.write(f"is_a: tpg{id_prefix}:0000000 ! {root_name} ({species_name})\n")
+
+                    # Process synonyms
+                    if generate_synonyms:
+                        synonyms = []
+                        if entity_type == "gene" and hasattr(entity, 'gene_synonyms'):
+                            synonyms = entity.gene_synonyms
+                        for synonym in synonyms:
+                            synonym_name = None
+                            if hasattr(synonym, 'display_text'):
+                                synonym_name = synonym.display_text
+                            elif hasattr(synonym, 'format_text'):
+                                synonym_name = synonym.format_text
+                            
+                            # Skip if already processed or empty
+                            if not synonym_name or synonym_name in found_synonyms:
+                                continue
+                            
+                            found_synonyms.add(synonym_name)
+                            
+                            # Apply MOD-specific formatting
+                            if mod == 'WB':
+                                synonym_name = synonym_name.lower()
+                            
+                            synonym_records_printed += 1
+                            tp_id = f"tpgs{id_prefix}:{synonym_records_printed:07d}"
+                            synonym_file.write(f"\n[Term]\nid: {tp_id}\nname: {synonym_name}\n")
+                            synonym_file.write(f"is_a: tpgs{id_prefix}:0000000 ! {synonym_root_name} ({species_name})\n")
+                
+                # Progress update
+                current_page += 1
+                print(f"Page {current_page}: Genes: {records_printed}, "
+                      f"Synonyms: {synonym_records_printed}")
+                
+                # If we got less than PAGE_LIMIT results, we've reached the end
+                if len(entities) < PAGE_LIMIT:
+                    break
+                    
+            except Exception as e:
+                print(f"Error fetching page {current_page}: {e}")
+                break
+        
+        # Print final statistics
+        print(f"Total {root_name} Records Written: {records_printed}")
+        if generate_synonyms:
+            print(f"Total {synonym_root_name} Records Written: {synonym_records_printed}")
+            
+    finally:
+        # Ensure files are properly closed
+        if entity_file:
+            entity_file.close()
+        if synonym_file:
+            synonym_file.close()
 
 
 def generate_entity_list_from_a_team(mod, entity_type, params, id_prefix, species_name, filename_id, now, token, headers):
