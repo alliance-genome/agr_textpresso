@@ -176,6 +176,14 @@ def read_entities(file_path):
     return entity_dict, max_id
 
 
+def get_name_from_entity(entity_symbol):
+    if hasattr(entity_symbol, 'format_text'):
+        entity_name = entity_symbol.format_text
+    elif hasattr(entity_symbol, 'display_text'):
+        entity_name = entity_symbol.display_text
+    return entity_name
+
+
 def generate_entity_list_from_a_team_api(mod, entity_type, id_prefix, species_name, filename_id, now,
                                          generate_synonyms=False):
     """
@@ -189,7 +197,6 @@ def generate_entity_list_from_a_team_api(mod, entity_type, id_prefix, species_na
     root_name = entity_type.capitalize()
     synonym_root_name = entity_type.capitalize().replace("_synonym", " Synonym")
 
-    
     # Initialize file writers and counters
     entity_file = None
     synonym_file = None
@@ -219,7 +226,7 @@ def generate_entity_list_from_a_team_api(mod, entity_type, id_prefix, species_na
             try:
                 entities = []
                 # Get genes from API client
-                if entity_type == 'gene':
+                if entity_type in ['gene', 'protein']:
                     entities = api_client.get_genes(data_provider=mod, limit=PAGE_LIMIT, page=current_page)
                 
                 # Check if we got any results
@@ -235,19 +242,18 @@ def generate_entity_list_from_a_team_api(mod, entity_type, id_prefix, species_na
                         continue
                     
                     # Process entity name
-                    entity_name = None
                     entity_symbol = None
                     if entity_type == 'gene':
                         entity_symbol = entity.gene_symbol
-                    if hasattr(entity_symbol, 'format_text'):
-                        entity_name = entity_symbol.format_text
-                    elif hasattr(entity_symbol, 'display_text'):
-                        entity_name = entity_symbol.display_text
+                    entity_name = get_name_from_entity(entity_symbol)
 
                     if entity_name:
                         # Apply MOD-specific formatting
                         if mod == 'WB':
-                            gene_name = entity_name.lower()
+                            if entity_type == 'gene':
+                                entity_name = entity_name.lower()
+                            elif entity_type == 'protein':
+                                entity_name = entity_name.upper()
 
                         records_printed += 1
                         tp_id = f"tpg{id_prefix}:{records_printed:07d}"
@@ -257,14 +263,10 @@ def generate_entity_list_from_a_team_api(mod, entity_type, id_prefix, species_na
                     # Process synonyms
                     if generate_synonyms:
                         synonyms = []
-                        if entity_type == "gene" and hasattr(entity, 'gene_synonyms'):
+                        if entity_type in ["gene", "protein"] and hasattr(entity, 'gene_synonyms'):
                             synonyms = entity.gene_synonyms
                         for synonym in synonyms:
-                            synonym_name = None
-                            if hasattr(synonym, 'display_text'):
-                                synonym_name = synonym.display_text
-                            elif hasattr(synonym, 'format_text'):
-                                synonym_name = synonym.format_text
+                            synonym_name = get_name_from_entity(synonym)
                             
                             # Skip if already processed or empty
                             if not synonym_name or synonym_name in found_synonyms:
@@ -273,8 +275,12 @@ def generate_entity_list_from_a_team_api(mod, entity_type, id_prefix, species_na
                             found_synonyms.add(synonym_name)
                             
                             # Apply MOD-specific formatting
+                            # Apply MOD-specific formatting
                             if mod == 'WB':
-                                synonym_name = synonym_name.lower()
+                                if entity_type == 'gene':
+                                    entity_name = entity_name.lower()
+                                elif entity_type == 'protein':
+                                    entity_name = entity_name.upper()
                             
                             synonym_records_printed += 1
                             tp_id = f"tpgs{id_prefix}:{synonym_records_printed:07d}"
