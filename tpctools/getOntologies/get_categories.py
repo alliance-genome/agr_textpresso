@@ -98,23 +98,12 @@ def read_entities(file_path):
 
 
 def get_name_from_entity(entity_symbol):
-    # Handle both object attributes and dictionary access
     if entity_symbol is None:
         return None
-    
-    # If it's a dictionary, extract the text
-    if isinstance(entity_symbol, dict):
-        if 'formatText' in entity_symbol:
-            return entity_symbol['formatText']
-        elif 'displayText' in entity_symbol:
-            return entity_symbol['displayText']
-    
-    # If it's an object, use attributes
-    if hasattr(entity_symbol, 'format_text'):
-        return entity_symbol.format_text
-    elif hasattr(entity_symbol, 'display_text'):
-        return entity_symbol.display_text
-    
+    if hasattr(entity_symbol, 'formatText'):
+        return entity_symbol.formatText
+    elif hasattr(entity_symbol, 'displayText'):
+        return entity_symbol.displayText
     return None
 
 
@@ -344,13 +333,20 @@ def _process_single_entity(entity, entity_type: str, mod: str, entity_writer, sy
     # Process main entity based on entity type
     entity_symbol = None
     
-    # Try different ways to access gene_symbol based on how API returns data
+    # Extract entity symbol based on entity type
     if entity_type in ['gene', 'protein']:
-        if hasattr(entity, 'gene_symbol'):
-            entity_symbol = entity.gene_symbol
-        elif hasattr(entity, '__dict__') and 'gene_symbol' in entity.__dict__:
-            entity_symbol = entity.__dict__['gene_symbol']
-    
+        if hasattr(entity, 'geneSymbol'):
+            entity_symbol = entity.geneSymbol
+    elif entity_type == 'allele':
+        if hasattr(entity, 'alleleSymbol'):
+            entity_symbol = entity.alleleSymbol
+    elif entity_type == 'fish':
+        # For AGM (fish) entities, check if it's actually a fish subtype
+        if hasattr(entity, 'subtype') and entity.subtype:
+            if getattr(entity.subtype, 'name', None) == 'fish':
+                if hasattr(entity, 'agmFullName'):
+                    entity_symbol = entity.agmFullName
+
     entity_name = get_name_from_entity(entity_symbol)
     
     if entity_name:
@@ -360,10 +356,19 @@ def _process_single_entity(entity, entity_type: str, mod: str, entity_writer, sy
     # Process synonyms if requested
     if synonym_writer:
         synonyms = None
-        if hasattr(entity, 'gene_synonyms'):
-            synonyms = entity.gene_synonyms
-        elif hasattr(entity, '__dict__') and 'gene_synonyms' in entity.__dict__:
-            synonyms = entity.__dict__['gene_synonyms']
+        
+        # Get synonyms based on entity type
+        if entity_type in ['gene', 'protein']:
+            if hasattr(entity, 'geneSynonyms'):
+                synonyms = entity.geneSynonyms
+            elif hasattr(entity, 'gene_synonyms'):
+                synonyms = entity.gene_synonyms
+        elif entity_type == 'allele':
+            if hasattr(entity, 'alleleSynonyms'):
+                synonyms = entity.alleleSynonyms
+            elif hasattr(entity, 'allele_synonyms'):
+                synonyms = entity.allele_synonyms
+        # Note: fish/agm entities typically don't have synonyms in the old implementation
             
         if synonyms:
             for synonym in synonyms:
