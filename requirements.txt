@@ -6,5 +6,5 @@ requests==2.30.0
 urllib3==1.26.15
 python-dateutil
 
-agr-curation-api-client==0.3.0
+agr-curation-api-client==0.4.1
 

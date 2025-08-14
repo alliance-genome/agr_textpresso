@@ -1,5 +1,4 @@
 import urllib.request
-import json
 import time
 import re
 from datetime import datetime
@@ -7,12 +6,9 @@ from datetime import datetime
 from agr_curation_api import APIConfig, AGRCurationAPIClient
 from dateutil.relativedelta import relativedelta
 import argparse
-from os import rename
 
 from get_sgd_specific_categories import create_obo_file
-from fastapi_okta.okta_utils import get_authentication_token, generate_headers
 
-API_URL = "https://curation.alliancegenome.org/api/"
 PAGE_LIMIT = 1000
 
 
@@ -23,99 +19,23 @@ def get_category_data(mod, download_all=False):
     if download_all:
         download_all_ontologies(mod, id_prefix)
 
-    now = time.asctime()
-    token = get_authentication_token()
-    headers = generate_headers(token)
-    params = {
-        "searchFilters": {
-            "dataProviderFilter": {
-                "dataProvider.abbreviation": {
-                    "queryString": mod,
-                    "tokenOperator": "OR"
-                }
-            }
-        },
-        "sortOrders": [],
-        "aggregations": [],
-        "nonNullFieldsTable": []
-    }
-
     if mod == 'WB':
-        # generate_entity_list_from_a_team(mod, 'gene', params, id_prefix, species_name, filename_id, now, token, headers)
-        # generate_entity_list_from_a_team(mod, 'gene_synonym', params, 's' + id_prefix, species_name, filename_id, now, token, headers)
         generate_entity_list_from_a_team_api(mod, 'gene', generate_synonyms=True)
         generate_entity_list_from_a_team_api(mod, 'protein', generate_synonyms=True)
-        # generate_entity_list_from_a_team(mod, 'protein', params, id_prefix, species_name, filename_id, now, token, headers)
-        # generate_entity_list_from_a_team(mod, 'protein_synonym', params, 's' + id_prefix, species_name, filename_id, now, token, headers)
-        update_entity_list(mod, 'allele', params, id_prefix, species_name, filename_id, now, token, headers)
+        update_entity_list_from_ateam_api(mod, 'allele')
     elif mod == 'MGI':
-        generate_entity_list_from_a_team(mod, 'gene', params, id_prefix, species_name, filename_id, now, token, headers)
+        generate_entity_list_from_a_team_api(mod, 'gene')
     elif mod == 'ZFIN':
-        generate_entity_list_from_a_team(mod, 'gene', params, id_prefix, species_name, filename_id, now, token, headers)
-        generate_entity_list_from_a_team(mod, 'allele', params, id_prefix, species_name, filename_id, now, token, headers)
-        generate_entity_list_from_a_team(mod, 'fish', params, id_prefix, species_name, filename_id, now, token, headers)
+        generate_entity_list_from_a_team_api(mod, 'gene')
+        generate_entity_list_from_a_team_api(mod, 'allele')
+        generate_entity_list_from_a_team_api(mod, 'fish')
     elif mod == 'FB':
-        generate_entity_list_from_a_team(mod, 'gene', params, id_prefix, species_name, filename_id, now, token, headers)
+        generate_entity_list_from_a_team_api(mod, 'gene')
     elif mod == 'SGD':
-        generate_entity_list_from_a_team(mod, 'gene', params, id_prefix, species_name, filename_id, now, token, headers)
-        generate_entity_list_from_a_team(mod, 'allele', params, id_prefix, species_name, filename_id, now, token, headers)
+        generate_entity_list_from_a_team_api(mod, 'gene')
+        generate_entity_list_from_a_team_api(mod, 'allele')
         create_obo_file('tppsc', 'Protein', "protein_saccharomyces_cerevisiae.obo")
         create_obo_file('tpssc', 'Strain', "strain_saccharomyces_cerevisiae.obo")
-
-
-def update_entity_list(mod, entity_type, params, id_prefix, species_name, filename_id, now, token, headers):
-    ## can make it work for other entities as well
-    params["sortOrders"] = [
-        {
-            "field": "dbDateUpdated",
-            "order": -1
-        }
-    ]
-
-    current_page = 0
-    
-    new_entities = set()
-    obsolete_entities = set()
-    records_printed = 0
-    current_date = datetime.now()
-    date_two_months_ago = (current_date - relativedelta(months=2)).date()    
-    while True:
-        url = f"{API_URL}{entity_type}/search?limit={PAGE_LIMIT}&page={current_page}"
-        request_data_encoded = json.dumps(params).encode('utf-8')
-        request = urllib.request.Request(url, data=request_data_encoded)
-        request.add_header("Authorization", f"Bearer {token}")
-        request.add_header("Content-type", "application/json")
-        request.add_header("Accept", "application/json")
-
-        with urllib.request.urlopen(request) as response:
-            resp_obj = json.loads(response.read().decode("utf8"))
-
-        if resp_obj['returnedRecords'] < 1:
-            break
-        done = False
-        for result in resp_obj['results']:
-            # example result['dbDateUpdated']: '2024-01-19T08:57:10.553475Z'
-            dateUpdatedStr = result['dbDateUpdated']
-            dateUpdated = datetime.fromisoformat(dateUpdatedStr.rstrip('Z')).date()
-            if dateUpdated < date_two_months_ago:
-                done = True
-                break
-            records_printed += 1
-            print(dateUpdated, result[entity_type+'Symbol']['formatText'], result['obsolete'], result['internal'])
-            if not result['obsolete'] and not result['internal']:
-                new_entities.add(result[entity_type+'Symbol']['formatText'])
-            else:
-                obsolete_entities.add(result[entity_type+'Symbol']['formatText'])
-
-        current_page += 1
-        print(f"Total {entity_type.capitalize()} Records Printed {records_printed} of {resp_obj['totalResults']}")
-        if done:
-            break
-    if len(new_entities) == 0:
-        return   
-    entity_list_file = f"{entity_type}_{filename_id}.obo"
-    curr_entity_list_file = f"/data/textpresso/obofiles4production/{entity_list_file}"
-    process_entities(curr_entity_list_file, entity_list_file, new_entities, obsolete_entities, entity_type, id_prefix, species_name)
     
 
 def process_entities(curr_file_with_path, new_file_with_path, new_entities, obsolete_entities, entity_type, id_prefix, species_name):
@@ -224,6 +144,45 @@ def generate_entity_list_from_a_team_api(mod: str, entity_type: str, generate_sy
             synonym_writer.close()
 
 
+def update_entity_list_from_ateam_api(mod: str, entity_type: str) -> None:
+    """
+    Update existing entity list files with recent changes using AGRCurationAPIClient.
+    Only processes entities updated in the last 2 months.
+    
+    Args:
+        mod: Model organism database (e.g., 'WB', 'MGI')
+        entity_type: Type of entity to process ('gene', 'allele', 'fish')
+    """
+    id_prefix, species_name, filename_id = get_id_prefix_species_name(mod)
+    
+    api_client = _create_api_client()
+    
+    # Collect recently updated entities
+    new_entities = set()
+    obsolete_entities = set()
+    
+    try:
+        _collect_updated_entities(api_client, mod, entity_type, new_entities, obsolete_entities)
+    except Exception as e:
+        print(f"Error collecting updated entities: {e}")
+        return
+    
+    if len(new_entities) == 0 and len(obsolete_entities) == 0:
+        print(f"No updated {entity_type} entities found for {mod}")
+        return
+    
+    # Update the existing OBO file
+    entity_list_file = f"{entity_type}_{filename_id}.obo"
+    curr_entity_list_file = f"/data/textpresso/obofiles4production/{entity_list_file}"
+    
+    try:
+        process_entities(curr_entity_list_file, entity_list_file, new_entities, obsolete_entities, 
+                         entity_type, id_prefix, species_name)
+        print(f"Updated {entity_list_file}: {len(new_entities)} new, {len(obsolete_entities)} obsolete")
+    except Exception as e:
+        print(f"Error updating entity file: {e}")
+
+
 def _create_api_client() -> AGRCurationAPIClient:
     """Create and return AGR API client."""
     api_config = APIConfig()
@@ -277,7 +236,101 @@ def _fetch_entities_page(api_client: AGRCurationAPIClient, mod: str, entity_type
     """Fetch a single page of entities from the API."""
     if entity_type in ['gene', 'protein']:
         return api_client.get_genes(data_provider=mod, limit=PAGE_LIMIT, page=page)
+    elif entity_type == 'allele':
+        return api_client.get_alleles(data_provider=mod, limit=PAGE_LIMIT, page=page)
+    elif entity_type == 'fish':
+        return api_client.get_agms(data_provider=mod, limit=PAGE_LIMIT, page=page)
     return []
+
+
+def _collect_updated_entities(api_client: AGRCurationAPIClient, mod: str, entity_type: str, 
+                             new_entities: set, obsolete_entities: set) -> None:
+    """
+    Collect recently updated entities (within last 2 months) from the API.
+    
+    Note: This function currently fetches all entities as the AGRCurationAPIClient
+    doesn't support sorting by dbDateUpdated yet. This should be enhanced when
+    the client library supports date-based filtering or sorting.
+    """
+    current_page = 0
+    records_processed = 0
+    current_date = datetime.now()
+    date_two_months_ago = (current_date - relativedelta(months=2)).date()
+    
+    print(f"Collecting {entity_type} entities updated since {date_two_months_ago}")
+    
+    while True:
+        try:
+            entities = _fetch_entities_page(api_client, mod, entity_type, current_page)
+            if not entities:
+                break
+                
+            for entity in entities:
+                # Check if entity has a date updated field
+                date_updated = None
+                if hasattr(entity, 'date_updated') and entity.date_updated:
+                    try:
+                        date_updated = datetime.fromisoformat(
+                            entity.date_updated.rstrip('Z')).date()
+                    except (ValueError, AttributeError):
+                        pass
+                elif hasattr(entity, 'db_date_updated') and entity.db_date_updated:
+                    try:
+                        date_updated = datetime.fromisoformat(
+                            entity.db_date_updated.rstrip('Z')).date()
+                    except (ValueError, AttributeError):
+                        pass
+                
+                # If we can't get the date, process all entities (fallback behavior)
+                if date_updated and date_updated < date_two_months_ago:
+                    continue
+                    
+                records_processed += 1
+                
+                # Check if entity should be skipped (obsolete or internal)
+                if _should_skip_entity(entity):
+                    entity_name = _get_entity_name_from_api_entity(entity, entity_type, mod)
+                    if entity_name:
+                        obsolete_entities.add(entity_name)
+                    continue
+                
+                # Get entity name
+                entity_name = _get_entity_name_from_api_entity(entity, entity_type, mod)
+                if entity_name:
+                    new_entities.add(entity_name)
+            
+            current_page += 1
+            print(f"Page {current_page}: Processed {records_processed} entities, "
+                  f"New: {len(new_entities)}, Obsolete: {len(obsolete_entities)}")
+            
+            if len(entities) < PAGE_LIMIT:
+                break
+                
+        except Exception as e:
+            print(f"Error fetching page {current_page}: {e}")
+            break
+
+
+def _get_entity_name_from_api_entity(entity, entity_type: str, mod: str) -> str:
+    """Extract entity name from API entity object."""
+    entity_name = None
+    
+    if entity_type == 'gene':
+        entity_symbol = getattr(entity, 'gene_symbol', None)
+        entity_name = get_name_from_entity(entity_symbol)
+        if entity_name and mod == 'WB':
+            entity_name = entity_name.lower()
+    elif entity_type == 'allele':
+        allele_symbol = getattr(entity, 'allele_symbol', None)
+        entity_name = get_name_from_entity(allele_symbol)
+    elif entity_type == 'fish':
+        # For AGM (fish) entities
+        if hasattr(entity, 'subtype') and entity.subtype:
+            if getattr(entity.subtype, 'name', None) == 'fish':
+                agm_full_name = getattr(entity, 'agm_full_name', None)
+                entity_name = get_name_from_entity(agm_full_name)
+    
+    return entity_name
 
 
 def _should_skip_entity(entity) -> bool:
@@ -356,89 +409,6 @@ class _EntityFileWriter:
         if self.file_handle:
             self.file_handle.close()
             print(f"Total {self.root_name} Records Written: {self.records_count}")
-
-
-def generate_entity_list_from_a_team(mod, entity_type, params, id_prefix, species_name, filename_id, now, token, headers):
-    if entity_type not in ["gene", "allele", "fish", "protein", "gene_synonym", "protein_synonym"]:
-        return
-
-    if entity_type.startswith("protein") and mod != "WB":
-        return
-    found_synonyms = set()
-    entity_list_file = f"{entity_type}_{filename_id}.obo"
-    with open(entity_list_file, "w") as f:
-        entity_type_short = entity_type.split('_')[0]
-        entity_type_short = "agm" if entity_type_short == "fish" else "gene" if entity_type_short == "protein" else entity_type_short
-        tp_root_id = f"tp{entity_type[0]}{id_prefix}:0000000"
-        root_name = entity_type.capitalize()
-        root_name = root_name.replace("_synonym", " Synonym")
-        write_obo_file_header(f, tp_root_id, root_name, species_name, now)
-
-        current_page = 0
-        records_printed = 0
-        while True:
-            url = f"{API_URL}{entity_type_short}/search?limit={PAGE_LIMIT}&page={current_page}"
-            request_data_encoded = json.dumps(params).encode('utf-8')
-            request = urllib.request.Request(url, data=request_data_encoded)
-            request.add_header("Authorization", f"Bearer {token}")
-            request.add_header("Content-type", "application/json")
-            request.add_header("Accept", "application/json")
-
-            with urllib.request.urlopen(request) as response:
-                resp_obj = json.loads(response.read().decode("utf8"))
-
-            if resp_obj['returnedRecords'] < 1:
-                break
-
-            for result in resp_obj['results']:
-                if result['obsolete'] or result['internal']:
-                    continue
-                entity_name = get_entity_name(entity_type, result, mod)
-                if entity_name:
-                    if mod != 'WB' or not entity_type.endswith("_synonym"):
-                        records_printed += 1
-                        tp_id = f"tp{entity_type[0]}{id_prefix}:{records_printed:07d}"
-                        f.write(f"\n[Term]\nid: {tp_id}\nname: {entity_name}\nis_a: {tp_root_id} ! {root_name} ({species_name})\n")
-                        
-                if entity_type_short in ["gene", "allele"]:
-                    if mod != 'WB' or entity_type.endswith("_synonym"):
-                        synonymField = f"{entity_type_short}Synonyms"
-                        if synonymField in result:
-                            for s in result[synonymField]:
-                                alias_name = s["displayText"]
-                                if alias_name in found_synonyms:
-                                    continue
-                                found_synonyms.add(alias_name)
-                                records_printed += 1
-                                tp_id = f"tp{entity_type[0]}{id_prefix}:{records_printed:07d}"
-                                if mod == "WB":
-                                    if entity_type.startswith("protein"):
-                                        alias_name = alias_name.upper()
-                                    elif entity_type.startswith("gene"):
-                                        alias_name = alias_name.lower()
-                                f.write(f"\n[Term]\nid: {tp_id}\nname: {alias_name}\nis_a: {tp_root_id} ! {root_name} ({species_name})\n")                            
-            current_page += 1
-            print(f"Total {entity_type.capitalize()} Records Printed {records_printed} of {resp_obj['totalResults']}")
-
-
-def get_entity_name(entity_type, result, mod=None):
-    if entity_type == 'gene':
-        gene_name = result['geneSymbol']['formatText']
-        if mod and mod == 'WB':
-            return gene_name.lower()
-        return gene_name
-    elif entity_type == 'protein':
-        ## currently just for WB
-        gene_name = result['geneSymbol']['formatText']
-        return gene_name.upper()
-    elif entity_type == 'allele':
-        return result['alleleSymbol']['formatText']
-    elif entity_type == 'fish':
-        if result['subtype']['name'] != 'fish':
-            return None
-        if 'agmFullName' in result and 'displayText' in result['agmFullName']:
-            return result['agmFullName']['displayText']
-        return None
  
 
 def write_obo_file_header(f, tp_root_id, root_name, species_name, now):
@@ -449,6 +419,7 @@ def write_obo_file_header(f, tp_root_id, root_name, species_name, now):
     f.write("[Term]\n")
     f.write(f"id: {tp_root_id}\n")
     f.write(f"name: {root_name} ({species_name})\n")
+
 
 def download_all_ontologies(mod, id_prefix):
 
