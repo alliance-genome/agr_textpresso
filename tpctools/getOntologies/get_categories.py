@@ -44,8 +44,9 @@ def get_category_data(mod, download_all=False):
         # generate_entity_list_from_a_team(mod, 'gene', params, id_prefix, species_name, filename_id, now, token, headers)
         # generate_entity_list_from_a_team(mod, 'gene_synonym', params, 's' + id_prefix, species_name, filename_id, now, token, headers)
         generate_entity_list_from_a_team_api(mod, 'gene', generate_synonyms=True)
-        generate_entity_list_from_a_team(mod, 'protein', params, id_prefix, species_name, filename_id, now, token, headers)
-        generate_entity_list_from_a_team(mod, 'protein_synonym', params, 's' + id_prefix, species_name, filename_id, now, token, headers)
+        generate_entity_list_from_a_team_api(mod, 'protein', generate_synonyms=True)
+        # generate_entity_list_from_a_team(mod, 'protein', params, id_prefix, species_name, filename_id, now, token, headers)
+        # generate_entity_list_from_a_team(mod, 'protein_synonym', params, 's' + id_prefix, species_name, filename_id, now, token, headers)
         update_entity_list(mod, 'allele', params, id_prefix, species_name, filename_id, now, token, headers)
     elif mod == 'MGI':
         generate_entity_list_from_a_team(mod, 'gene', params, id_prefix, species_name, filename_id, now, token, headers)
@@ -213,7 +214,7 @@ def generate_entity_list_from_a_team_api(mod: str, entity_type: str, generate_sy
     
     # Process entities and optionally synonyms
     entity_writer = _EntityFileWriter(entity_type, id_prefix, species_name, filename_id, now)
-    synonym_writer = _EntityFileWriter('gene_synonym', id_prefix, species_name, filename_id, now) if generate_synonyms else None
+    synonym_writer = _EntityFileWriter(entity_type, id_prefix, species_name, filename_id, now) if generate_synonyms else None
     
     try:
         _process_entities_from_api(api_client, mod, entity_type, entity_writer, synonym_writer)
@@ -574,6 +575,7 @@ def get_id_prefix_species_name(mod):
         'XB': ("xl", "X. laevis", "xenopus_laevis")
     }
     return mod_info.get(mod, ("", "", ""))
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
