@@ -103,7 +103,8 @@ def get_name_from_entity(entity_symbol: Any) -> Optional[str]:
     return None
 
 
-def generate_entity_list_from_a_team_api(mod: str, entity_type: str, generate_synonyms: bool = False) -> None:
+def generate_entity_list_from_a_team_api(mod: str, entity_type: str, generate_synonyms: bool = False,
+                                         all_uppercase_file_name: Optional[str] = None) -> None:
     """
     Generate entity list files using AGRCurationAPIClient.
 
@@ -111,15 +112,23 @@ def generate_entity_list_from_a_team_api(mod: str, entity_type: str, generate_sy
         mod: Model organism database (e.g., 'WB', 'MGI')
         entity_type: Type of entity to process ('gene', 'protein')
         generate_synonyms: Whether to also generate synonym files
+        all_uppercase_file_name: If provided, read entities from this file and generate uppercase versions
+                               (used for WB proteins which are uppercase versions of genes)
     """
     id_prefix, species_name, filename_id = get_id_prefix_species_name(mod)
     now = time.asctime()
-
+    
+    # Handle uppercase file generation (e.g., WB proteins from genes)
+    if all_uppercase_file_name:
+        _generate_uppercase_from_source_file(all_uppercase_file_name, entity_type, id_prefix,
+                                             species_name, filename_id, now, generate_synonyms)
+        return
+    
     api_client = _create_api_client()
 
     # Process entities and optionally synonyms
     entity_writer = _EntityFileWriter(entity_type, id_prefix, species_name, filename_id, now)
-    synonym_writer = (_EntityFileWriter(entity_type, id_prefix, species_name, filename_id, now)
+    synonym_writer = (_EntityFileWriter(f"{entity_type}_synonym", id_prefix, species_name, filename_id, now)
                       if generate_synonyms else None)
 
     try:
@@ -140,7 +149,6 @@ def update_entity_list_from_ateam_api(mod: str, entity_type: str) -> None:
         entity_type: Type of entity to process ('gene', 'allele', 'fish')
     """
     id_prefix, species_name, filename_id = get_id_prefix_species_name(mod)
-
     api_client = _create_api_client()
 
     # Collect recently updated entities
@@ -219,14 +227,14 @@ def _process_entities_from_api(api_client: AGRCurationAPIClient, mod: str, entit
             break
 
 
-def _fetch_entities_page(api_client: AGRCurationAPIClient, mod: str, entity_type: str, page: int):
+def _fetch_entities_page(api_client: AGRCurationAPIClient, mod: str, entity_type: str, page: int, updated_after=None):
     """Fetch a single page of entities from the API."""
     if entity_type in ['gene', 'protein']:
-        return api_client.get_genes(data_provider=mod, limit=PAGE_LIMIT, page=page)
+        return api_client.get_genes(data_provider=mod, limit=PAGE_LIMIT, page=page, updated_after=updated_after)
     elif entity_type == 'allele':
-        return api_client.get_alleles(data_provider=mod, limit=PAGE_LIMIT, page=page)
+        return api_client.get_alleles(data_provider=mod, limit=PAGE_LIMIT, page=page, updated_after=updated_after)
     elif entity_type == 'fish':
-        return api_client.get_agms(data_provider=mod, limit=PAGE_LIMIT, page=page)
+        return api_client.get_agms(data_provider=mod, limit=PAGE_LIMIT, page=page, updated_after=updated_after)
     return []
 
 
@@ -242,34 +250,26 @@ def _collect_updated_entities(api_client: AGRCurationAPIClient, mod: str, entity
     current_page = 0
     records_processed = 0
     current_date = datetime.now()
-    date_two_months_ago = (current_date - relativedelta(months=2)).date()
+    date_two_months_ago = (current_date - relativedelta(months=2)).isoformat()
 
     print(f"Collecting {entity_type} entities updated since {date_two_months_ago}")
 
     while True:
         try:
-            entities = _fetch_entities_page(api_client, mod, entity_type, current_page)
+            entities = _fetch_entities_page(api_client, mod, entity_type, current_page, date_two_months_ago)
             if not entities:
                 break
 
             for entity in entities:
                 # Check if entity has a date updated field
-                date_updated = None
+                date_updated_str = None
                 if hasattr(entity, 'date_updated') and entity.date_updated:
-                    try:
-                        date_updated = datetime.fromisoformat(
-                            entity.date_updated.rstrip('Z')).date()
-                    except (ValueError, AttributeError):
-                        pass
+                    date_updated_str = entity.date_updated
                 elif hasattr(entity, 'db_date_updated') and entity.db_date_updated:
-                    try:
-                        date_updated = datetime.fromisoformat(
-                            entity.db_date_updated.rstrip('Z')).date()
-                    except (ValueError, AttributeError):
-                        pass
+                    date_updated_str = entity.db_date_updated
 
                 # If we can't get the date, process all entities (fallback behavior)
-                if date_updated and date_updated < date_two_months_ago:
+                if date_updated_str and date_updated_str < date_two_months_ago:
                     continue
 
                 records_processed += 1
@@ -416,6 +416,70 @@ class _EntityFileWriter:
         if self.file_handle:
             self.file_handle.close()
             print(f"Total {self.root_name} Records Written: {self.records_count}")
+
+
+def _generate_uppercase_from_source_file(source_file_name: str, target_entity_type: str,
+                                         id_prefix: str, species_name: str, filename_id: str,
+                                         now: str, generate_synonyms: bool) -> None:
+    """
+    Generate uppercase entity files by reading from a source file and using file writers.
+    Used for WB proteins which are uppercase versions of gene names.
+    """
+    import os
+    
+    print(f"Generating {target_entity_type}_{filename_id}.obo from {source_file_name} (uppercase conversion)")
+    
+    # Check if source file exists (try current directory first, then production directory)
+    source_file_path = source_file_name
+    if not os.path.exists(source_file_path):
+        source_file_path = f"/data/textpresso/obofiles4production/{source_file_name}"
+        if not os.path.exists(source_file_path):
+            print(f"Source file {source_file_name} not found in current directory or production directory")
+            return
+    
+    # Check if source synonym file exists
+    # The pattern is: gene_caenorhabditis_elegans.obo -> gene_synonym_caenorhabditis_elegans.obo
+    base_name = source_file_name.replace('.obo', '')
+    parts = base_name.split('_', 1)  # Split into 'gene' and 'caenorhabditis_elegans'
+    if len(parts) == 2:
+        source_synonym_name = f"{parts[0]}_synonym_{parts[1]}.obo"
+    else:
+        source_synonym_name = source_file_name.replace('.obo', '_synonym.obo')
+    
+    source_synonym_path = source_synonym_name
+    if not os.path.exists(source_synonym_path):
+        source_synonym_path = f"/data/textpresso/obofiles4production/{source_synonym_name}"
+    has_synonyms = generate_synonyms and os.path.exists(source_synonym_path)
+    
+    # Create file writers
+    entity_writer = _EntityFileWriter(target_entity_type, id_prefix, species_name, filename_id, now)
+    synonym_writer = (_EntityFileWriter(f"{target_entity_type}_synonym", id_prefix, species_name, filename_id, now)
+                      if has_synonyms else None)
+    
+    try:
+        # Read and process main entity file
+        _read_and_convert_to_uppercase(source_file_path, entity_writer, species_name)
+        
+        # Read and process synonym file if it exists
+        if synonym_writer and has_synonyms:
+            print(f"Generating {target_entity_type}_synonym_{filename_id}.obo from {source_synonym_name} (uppercase conversion)")
+            _read_and_convert_to_uppercase(source_synonym_path, synonym_writer, species_name)
+            
+    finally:
+        entity_writer.close()
+        if synonym_writer:
+            synonym_writer.close()
+
+
+def _read_and_convert_to_uppercase(source_file_path: str, writer: '_EntityFileWriter', species_name: str) -> None:
+    """Read entity names from source file and write uppercase versions to target writer."""
+    with open(source_file_path, 'r') as source_file:
+        for line in source_file:
+            line = line.strip()
+            if line.startswith('name: ') and not line.endswith(f'({species_name})'):
+                # This is an entity name line (not the root term)
+                name_part = line[6:]  # Remove 'name: '
+                writer.write_entity(name_part.upper())
 
 
 def write_obo_file_header(f: Any, tp_root_id: str, root_name: str,
