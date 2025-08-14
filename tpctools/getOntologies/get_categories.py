@@ -2,20 +2,20 @@ import urllib.request
 import time
 import re
 from datetime import datetime
+from typing import Set, Optional, Any
 
-from agr_curation_api import APIConfig, AGRCurationAPIClient
+from agr_curation_api import APIConfig, AGRCurationAPIClient  # type: ignore
 from dateutil.relativedelta import relativedelta
 import argparse
 
-from get_sgd_specific_categories import create_obo_file
+from get_sgd_specific_categories import create_obo_file  # type: ignore
 
 PAGE_LIMIT = 1000
 
 
 def get_category_data(mod, download_all=False):
-
     id_prefix, species_name, filename_id = get_id_prefix_species_name(mod)
-    
+
     if download_all:
         download_all_ontologies(mod, id_prefix)
 
@@ -36,9 +36,11 @@ def get_category_data(mod, download_all=False):
         generate_entity_list_from_a_team_api(mod, 'allele')
         create_obo_file('tppsc', 'Protein', "protein_saccharomyces_cerevisiae.obo")
         create_obo_file('tpssc', 'Strain', "strain_saccharomyces_cerevisiae.obo")
-    
 
-def process_entities(curr_file_with_path, new_file_with_path, new_entities, obsolete_entities, entity_type, id_prefix, species_name):
+
+def process_entities(curr_file_with_path: str, new_file_with_path: str, new_entities: Set[str],
+                     obsolete_entities: Set[str], entity_type: str, id_prefix: str,
+                     species_name: str) -> None:
 
     # read current entities and determine the highest ID
     entity_dict, max_id = read_entities(curr_file_with_path)
@@ -49,7 +51,7 @@ def process_entities(curr_file_with_path, new_file_with_path, new_entities, obso
         content = old_file.readlines()
         i = 0
         skip_entry = False
-        block_buffer = []
+        block_buffer: list[str] = []
         while i < len(content):
             line = content[i]
             if '[Term]' in line:
@@ -82,22 +84,23 @@ def process_entities(curr_file_with_path, new_file_with_path, new_entities, obso
             if entity_name not in entity_dict:
                 max_id += 1
                 new_id = f"tpace:{max_id:07d}"
-                new_file.write(f"\n[Term]\nid: {new_id}\nname: {entity_name}\nis_a: {tp_root_id} ! {root_name} ({species_name})\n")
+                new_file.write(f"\n[Term]\nid: {new_id}\nname: {entity_name}\n"
+                               f"is_a: {tp_root_id} ! {root_name} ({species_name})\n")
 
 
-def read_entities(file_path):
-    
+def read_entities(file_path: str) -> tuple[dict[str, str], int]:
+
     with open(file_path, 'r') as file:
         content = file.read()
 
     ids = re.findall(r'^id: (\S+)', content, re.MULTILINE)
     names = re.findall(r'^name: (\S+)', content, re.MULTILINE)
     entity_dict = dict(zip(names, ids))
-    max_id = max(int(id.split(':')[-1]) for id in ids)
+    max_id = max(int(entity_id.split(':')[-1]) for entity_id in ids)
     return entity_dict, max_id
 
 
-def get_name_from_entity(entity_symbol):
+def get_name_from_entity(entity_symbol: Any) -> Optional[str]:
     if entity_symbol is None:
         return None
     if hasattr(entity_symbol, 'formatText'):
@@ -110,21 +113,22 @@ def get_name_from_entity(entity_symbol):
 def generate_entity_list_from_a_team_api(mod: str, entity_type: str, generate_synonyms: bool = False) -> None:
     """
     Generate entity list files using AGRCurationAPIClient.
-    
+
     Args:
         mod: Model organism database (e.g., 'WB', 'MGI')
-        entity_type: Type of entity to process ('gene', 'protein') 
+        entity_type: Type of entity to process ('gene', 'protein')
         generate_synonyms: Whether to also generate synonym files
     """
     id_prefix, species_name, filename_id = get_id_prefix_species_name(mod)
     now = time.asctime()
-    
+
     api_client = _create_api_client()
-    
+
     # Process entities and optionally synonyms
     entity_writer = _EntityFileWriter(entity_type, id_prefix, species_name, filename_id, now)
-    synonym_writer = _EntityFileWriter(entity_type, id_prefix, species_name, filename_id, now) if generate_synonyms else None
-    
+    synonym_writer = (_EntityFileWriter(entity_type, id_prefix, species_name, filename_id, now)
+                      if generate_synonyms else None)
+
     try:
         _process_entities_from_api(api_client, mod, entity_type, entity_writer, synonym_writer)
     finally:
@@ -137,35 +141,35 @@ def update_entity_list_from_ateam_api(mod: str, entity_type: str) -> None:
     """
     Update existing entity list files with recent changes using AGRCurationAPIClient.
     Only processes entities updated in the last 2 months.
-    
+
     Args:
         mod: Model organism database (e.g., 'WB', 'MGI')
         entity_type: Type of entity to process ('gene', 'allele', 'fish')
     """
     id_prefix, species_name, filename_id = get_id_prefix_species_name(mod)
-    
+
     api_client = _create_api_client()
-    
+
     # Collect recently updated entities
-    new_entities = set()
-    obsolete_entities = set()
-    
+    new_entities: Set[str] = set()
+    obsolete_entities: Set[str] = set()
+
     try:
         _collect_updated_entities(api_client, mod, entity_type, new_entities, obsolete_entities)
     except Exception as e:
         print(f"Error collecting updated entities: {e}")
         return
-    
+
     if len(new_entities) == 0 and len(obsolete_entities) == 0:
         print(f"No updated {entity_type} entities found for {mod}")
         return
-    
+
     # Update the existing OBO file
     entity_list_file = f"{entity_type}_{filename_id}.obo"
     curr_entity_list_file = f"/data/textpresso/obofiles4production/{entity_list_file}"
-    
+
     try:
-        process_entities(curr_entity_list_file, entity_list_file, new_entities, obsolete_entities, 
+        process_entities(curr_entity_list_file, entity_list_file, new_entities, obsolete_entities,
                          entity_type, id_prefix, species_name)
         print(f"Updated {entity_list_file}: {len(new_entities)} new, {len(obsolete_entities)} obsolete")
     except Exception as e:
@@ -174,7 +178,7 @@ def update_entity_list_from_ateam_api(mod: str, entity_type: str) -> None:
 
 def _create_api_client() -> AGRCurationAPIClient:
     """Create and return AGR API client."""
-    api_config = APIConfig()
+    api_config = APIConfig()  # type: ignore
     return AGRCurationAPIClient(api_config)
 
 
@@ -188,32 +192,33 @@ def _apply_mod_formatting(name: str, mod: str, entity_type: str) -> str:
     return name
 
 
-def _process_entities_from_api(api_client: AGRCurationAPIClient, mod: str, entity_type: str, 
-                               entity_writer, synonym_writer) -> None:
+def _process_entities_from_api(api_client: AGRCurationAPIClient, mod: str, entity_type: str,
+                               entity_writer: '_EntityFileWriter',
+                               synonym_writer: Optional['_EntityFileWriter']) -> None:
     """Process entities from API with pagination."""
     current_page = 0
-    found_synonyms = set()
-    
+    found_synonyms: Set[str] = set()
+
     while True:
         try:
             entities = _fetch_entities_page(api_client, mod, entity_type, current_page)
             if not entities:
                 print(f"No entities returned for {entity_type} page {current_page}")
                 break
-                
+
             for entity in entities:
                 if _should_skip_entity(entity):
                     continue
-                    
+
                 _process_single_entity(entity, entity_type, mod, entity_writer, synonym_writer, found_synonyms)
-            
+
             current_page += 1
             print(f"Page {current_page}: Entities: {entity_writer.records_count}, "
                   f"Synonyms: {synonym_writer.records_count if synonym_writer else 0}")
-            
+
             if len(entities) < PAGE_LIMIT:
                 break
-                
+
         except Exception as e:
             print(f"Error fetching page {current_page}: {e}")
             import traceback
@@ -232,11 +237,11 @@ def _fetch_entities_page(api_client: AGRCurationAPIClient, mod: str, entity_type
     return []
 
 
-def _collect_updated_entities(api_client: AGRCurationAPIClient, mod: str, entity_type: str, 
-                             new_entities: set, obsolete_entities: set) -> None:
+def _collect_updated_entities(api_client: AGRCurationAPIClient, mod: str, entity_type: str,
+                              new_entities: Set[str], obsolete_entities: Set[str]) -> None:
     """
     Collect recently updated entities (within last 2 months) from the API.
-    
+
     Note: This function currently fetches all entities as the AGRCurationAPIClient
     doesn't support sorting by dbDateUpdated yet. This should be enhanced when
     the client library supports date-based filtering or sorting.
@@ -245,15 +250,15 @@ def _collect_updated_entities(api_client: AGRCurationAPIClient, mod: str, entity
     records_processed = 0
     current_date = datetime.now()
     date_two_months_ago = (current_date - relativedelta(months=2)).date()
-    
+
     print(f"Collecting {entity_type} entities updated since {date_two_months_ago}")
-    
+
     while True:
         try:
             entities = _fetch_entities_page(api_client, mod, entity_type, current_page)
             if not entities:
                 break
-                
+
             for entity in entities:
                 # Check if entity has a date updated field
                 date_updated = None
@@ -269,41 +274,41 @@ def _collect_updated_entities(api_client: AGRCurationAPIClient, mod: str, entity
                             entity.db_date_updated.rstrip('Z')).date()
                     except (ValueError, AttributeError):
                         pass
-                
+
                 # If we can't get the date, process all entities (fallback behavior)
                 if date_updated and date_updated < date_two_months_ago:
                     continue
-                    
+
                 records_processed += 1
-                
+
                 # Check if entity should be skipped (obsolete or internal)
                 if _should_skip_entity(entity):
                     entity_name = _get_entity_name_from_api_entity(entity, entity_type, mod)
                     if entity_name:
                         obsolete_entities.add(entity_name)
                     continue
-                
+
                 # Get entity name
                 entity_name = _get_entity_name_from_api_entity(entity, entity_type, mod)
                 if entity_name:
                     new_entities.add(entity_name)
-            
+
             current_page += 1
             print(f"Page {current_page}: Processed {records_processed} entities, "
                   f"New: {len(new_entities)}, Obsolete: {len(obsolete_entities)}")
-            
+
             if len(entities) < PAGE_LIMIT:
                 break
-                
+
         except Exception as e:
             print(f"Error fetching page {current_page}: {e}")
             break
 
 
-def _get_entity_name_from_api_entity(entity, entity_type: str, mod: str) -> str:
+def _get_entity_name_from_api_entity(entity: Any, entity_type: str, mod: str) -> Optional[str]:
     """Extract entity name from API entity object."""
     entity_name = None
-    
+
     if entity_type == 'gene':
         entity_symbol = getattr(entity, 'gene_symbol', None)
         entity_name = get_name_from_entity(entity_symbol)
@@ -318,21 +323,24 @@ def _get_entity_name_from_api_entity(entity, entity_type: str, mod: str) -> str:
             if getattr(entity.subtype, 'name', None) == 'fish':
                 agm_full_name = getattr(entity, 'agm_full_name', None)
                 entity_name = get_name_from_entity(agm_full_name)
-    
+
     return entity_name
 
 
-def _should_skip_entity(entity) -> bool:
+def _should_skip_entity(entity: Any) -> bool:
     """Check if entity should be skipped (obsolete or internal)."""
-    return ((hasattr(entity, 'obsolete') and entity.obsolete) or 
+    return ((hasattr(entity, 'obsolete') and entity.obsolete) or
             (hasattr(entity, 'internal') and entity.internal))
 
 
-def _process_single_entity(entity, entity_type: str, mod: str, entity_writer, synonym_writer, found_synonyms: set) -> None:
+def _process_single_entity(entity: Any, entity_type: str, mod: str,
+                           entity_writer: '_EntityFileWriter',
+                           synonym_writer: Optional['_EntityFileWriter'],
+                           found_synonyms: Set[str]) -> None:
     """Process a single entity and its synonyms."""
     # Process main entity based on entity type
     entity_symbol = None
-    
+
     # Extract entity symbol based on entity type
     if entity_type in ['gene', 'protein']:
         if hasattr(entity, 'geneSymbol'):
@@ -348,15 +356,15 @@ def _process_single_entity(entity, entity_type: str, mod: str, entity_writer, sy
                     entity_symbol = entity.agmFullName
 
     entity_name = get_name_from_entity(entity_symbol)
-    
+
     if entity_name:
         formatted_name = _apply_mod_formatting(entity_name, mod, entity_type)
         entity_writer.write_entity(formatted_name)
-    
+
     # Process synonyms if requested
     if synonym_writer:
         synonyms = None
-        
+
         # Get synonyms based on entity type
         if entity_type in ['gene', 'protein']:
             if hasattr(entity, 'geneSynonyms'):
@@ -369,7 +377,7 @@ def _process_single_entity(entity, entity_type: str, mod: str, entity_writer, sy
             elif hasattr(entity, 'allele_synonyms'):
                 synonyms = entity.allele_synonyms
         # Note: fish/agm entities typically don't have synonyms in the old implementation
-            
+
         if synonyms:
             for synonym in synonyms:
                 synonym_name = get_name_from_entity(synonym)
@@ -381,13 +389,14 @@ def _process_single_entity(entity, entity_type: str, mod: str, entity_writer, sy
 
 class _EntityFileWriter:
     """Helper class to manage OBO file writing for entities."""
-    
-    def __init__(self, entity_type: str, id_prefix: str, species_name: str, filename_id: str, now: str):
+
+    def __init__(self, entity_type: str, id_prefix: str, species_name: str,
+                 filename_id: str, now: str) -> None:
         self.entity_type = entity_type
         self.id_prefix = id_prefix
         self.species_name = species_name
         self.records_count = 0
-        
+
         # Determine file naming and ID prefixes
         if entity_type == 'gene_synonym':
             self.filename = f"gene_synonym_{filename_id}.obo"
@@ -397,26 +406,27 @@ class _EntityFileWriter:
             self.filename = f"{entity_type}_{filename_id}.obo"
             self.tp_prefix = f"tpg{id_prefix}"
             self.root_name = entity_type.capitalize()
-        
+
         self.root_id = f"{self.tp_prefix}:0000000"
         self.file_handle = open(self.filename, "w")
         write_obo_file_header(self.file_handle, self.root_id, self.root_name, species_name, now)
-    
+
     def write_entity(self, name: str) -> None:
         """Write an entity to the OBO file."""
         self.records_count += 1
         tp_id = f"{self.tp_prefix}:{self.records_count:07d}"
         self.file_handle.write(f"\n[Term]\nid: {tp_id}\nname: {name}\n")
         self.file_handle.write(f"is_a: {self.root_id} ! {self.root_name} ({self.species_name})\n")
-    
+
     def close(self) -> None:
         """Close the file handle and print statistics."""
         if self.file_handle:
             self.file_handle.close()
             print(f"Total {self.root_name} Records Written: {self.records_count}")
- 
 
-def write_obo_file_header(f, tp_root_id, root_name, species_name, now):
+
+def write_obo_file_header(f: Any, tp_root_id: str, root_name: str,
+                          species_name: str, now: str) -> None:
     f.write("format-version: 1.2\n")
     f.write(f"date: {now}\n")
     f.write("saved-by: Textpresso\n")
@@ -426,7 +436,7 @@ def write_obo_file_header(f, tp_root_id, root_name, species_name, now):
     f.write(f"name: {root_name} ({species_name})\n")
 
 
-def download_all_ontologies(mod, id_prefix):
+def download_all_ontologies(mod: str, id_prefix: str) -> None:
 
     urllib.request.urlretrieve("https://current.geneontology.org/ontology/go-basic.obo", "go.obo_old")
     urllib.request.urlretrieve("https://purl.obolibrary.org/obo/doid.obo", "doid.obo_old")
@@ -469,14 +479,14 @@ def download_all_ontologies(mod, id_prefix):
         remove_obsolete_terms("fbcv_simple.obo_old", "fbcv_simple.obo")
 
 
-def remove_obsolete_terms(input_file_path, output_file_path):
+def remove_obsolete_terms(input_file_path: str, output_file_path: str) -> None:
     with open(input_file_path, 'r') as file:
         lines = file.readlines()
 
     write_block = True
     term_block = []
     new_content = []
-    
+
     # process each line in the OBO file
     for line in lines:
         # check for the start of a new term block
@@ -497,13 +507,13 @@ def remove_obsolete_terms(input_file_path, output_file_path):
                 # set the flag to not write this block if obsolete
                 write_block = False
             term_block.append(line)
-    
+
     # write the filtered content to a new file
     with open(output_file_path, 'w') as file:
         file.writelines(new_content)
 
 
-def generate_flattened_ontology_file(obo_file, id_prefix):
+def generate_flattened_ontology_file(obo_file: str, id_prefix: str) -> None:
 
     ontology_details = {
         'go': ("Gene Ontology (flattened, fast loading)", f"tpgf{id_prefix}:0000000"),
@@ -520,7 +530,7 @@ def generate_flattened_ontology_file(obo_file, id_prefix):
 
     flattened_file = f"{file_prefix}_flattened.obo"
 
-    termType = None
+    term_type = None
     with open(obo_file, 'r') as f, open(flattened_file, 'w') as fw:
         for count, line in enumerate(f, start=1):
             if count < 5:
@@ -528,19 +538,19 @@ def generate_flattened_ontology_file(obo_file, id_prefix):
             elif count == 5:
                 fw.write(f"\n[Term]\nid: {root_id}\nname: {root_term}\n\n")
             if line.strip().startswith("[") and line.strip().endswith("]"):
-                termType = line.strip()
+                term_type = line.strip()
             for text in ["[Term]", "id: ", "name: ", "def: ", "synonym: ", "xref: "]:
                 if line.startswith(text):
                     fw.write(line)
-            if count > 5 and line.strip() == '' and termType == "[Term]":
+            if count > 5 and line.strip() == '' and term_type == "[Term]":
                 fw.write(f"is_a: {root_id} ! {root_term}\n\n")
             if line.startswith("[Typedef]"):
                 break
 
     print(f"Flattened file created: {flattened_file}")
 
-    
-def get_id_prefix_species_name(mod):
+
+def get_id_prefix_species_name(mod: str) -> tuple[str, str, str]:
     mod_info = {
         'SGD': ("sc", "S. cerevisiae", "saccharomyces_cerevisiae"),
         'WB': ("ce", "C. elegans", "caenorhabditis_elegans"),
@@ -560,4 +570,3 @@ if __name__ == "__main__":
     parser.add_argument('-a', '--all', action='store_true', help="download all ontologies")
     args = parser.parse_args()
     get_category_data(args.mod, args.all)
-    
