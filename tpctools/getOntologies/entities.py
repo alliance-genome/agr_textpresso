@@ -234,7 +234,8 @@ def _fetch_entities_page(api_client: AGRCurationAPIClient, mod: str, entity_type
     elif entity_type == 'allele':
         return api_client.get_alleles(data_provider=mod, limit=PAGE_LIMIT, page=page, updated_after=updated_after)
     elif entity_type == 'fish':
-        return api_client.get_agms(data_provider=mod, limit=PAGE_LIMIT, page=page, updated_after=updated_after)
+        return api_client.get_agms(data_provider=mod, subtype="fish", limit=PAGE_LIMIT, page=page,
+                                   updated_after=updated_after)
     return []
 
 
@@ -342,11 +343,7 @@ def _process_single_entity(entity: Any, entity_type: str, mod: str,
         if hasattr(entity, 'alleleSymbol'):
             entity_symbol = entity.alleleSymbol
     elif entity_type == 'fish':
-        # For AGM (fish) entities, check if it's actually a fish subtype
-        if hasattr(entity, 'subtype') and entity.subtype:
-            if getattr(entity.subtype, 'name', None) == 'fish':
-                if hasattr(entity, 'agmFullName'):
-                    entity_symbol = entity.agmFullName
+        entity_symbol = entity.agmFullName
 
     entity_name = get_name_from_entity(entity_symbol)
 
