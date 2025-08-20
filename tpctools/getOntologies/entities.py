@@ -36,8 +36,27 @@ def process_entities(curr_file_with_path: str, new_file_with_path: str, new_enti
     """Process entities by updating an existing OBO file with new and obsolete entities."""
     # read current entities and determine the highest ID
     entity_dict, max_id = read_entities(curr_file_with_path)
-    tp_root_id = f"tp{entity_type[0]}{id_prefix}:0000000"
-    root_name = entity_type.capitalize()
+    
+    # Determine correct prefix based on entity type
+    if entity_type == 'gene':
+        tp_prefix = f"tpg{id_prefix}"
+    elif entity_type == 'protein':
+        tp_prefix = f"tpp{id_prefix}"
+    elif entity_type == 'gene_synonym':
+        tp_prefix = f"tpgs{id_prefix}"
+    elif entity_type == 'protein_synonym':
+        tp_prefix = f"tpps{id_prefix}"
+    elif entity_type == 'allele':
+        tp_prefix = f"tpa{id_prefix}"
+    elif entity_type == 'strain':
+        tp_prefix = f"tps{id_prefix}"
+    elif entity_type == 'fish':
+        tp_prefix = f"tpf{id_prefix}"
+    else:
+        tp_prefix = f"tp{entity_type[0]}{id_prefix}"
+    
+    tp_root_id = f"{tp_prefix}:0000000"
+    root_name = entity_type.replace('_', ' ').title()
     # create a new file
     with open(curr_file_with_path, 'r') as old_file, open(new_file_with_path, 'w') as new_file:
         content = old_file.readlines()
@@ -75,7 +94,7 @@ def process_entities(curr_file_with_path: str, new_file_with_path: str, new_enti
         for entity_name in new_entities:
             if entity_name not in entity_dict:
                 max_id += 1
-                new_id = f"tpace:{max_id:07d}"
+                new_id = f"{tp_prefix}:{max_id:07d}"
                 new_file.write(f"\n[Term]\nid: {new_id}\nname: {entity_name}\n"
                                f"is_a: {tp_root_id} ! {root_name} ({species_name})\n")
 
@@ -111,7 +130,7 @@ def generate_entity_list_from_a_team_api(mod: str, entity_type: str, generate_sy
     Args:
         mod: Model organism database (e.g., 'WB', 'MGI')
         entity_type: Type of entity to process ('gene', 'protein')
-        generate_synonyms: Whether to also generate synonym files
+        generate_synonyms: Whether to also generate synonym files (only used for WB)
         all_uppercase_file_name: If provided, read entities from this file and generate uppercase versions
                                (used for WB proteins which are uppercase versions of genes)
     """
@@ -126,10 +145,11 @@ def generate_entity_list_from_a_team_api(mod: str, entity_type: str, generate_sy
     
     api_client = _create_api_client()
 
-    # Process entities and optionally synonyms
+    # Process entities
     entity_writer = _EntityFileWriter(entity_type, id_prefix, species_name, filename_id, now)
+    # Only WB uses separate synonym files
     synonym_writer = (_EntityFileWriter(f"{entity_type}_synonym", id_prefix, species_name, filename_id, now)
-                      if generate_synonyms else None)
+                      if generate_synonyms and mod == 'WB' else None)
 
     try:
         _process_entities_from_api(api_client, mod, entity_type, entity_writer, synonym_writer)
@@ -351,30 +371,36 @@ def _process_single_entity(entity: Any, entity_type: str, mod: str,
         formatted_name = _apply_mod_formatting(entity_name, mod, entity_type)
         entity_writer.write_entity(formatted_name)
 
-    # Process synonyms if requested
-    if synonym_writer:
-        synonyms = None
+    # Process synonyms
+    synonyms = None
 
-        # Get synonyms based on entity type
-        if entity_type in ['gene', 'protein']:
-            if hasattr(entity, 'geneSynonyms'):
-                synonyms = entity.geneSynonyms
-            elif hasattr(entity, 'gene_synonyms'):
-                synonyms = entity.gene_synonyms
-        elif entity_type == 'allele':
-            if hasattr(entity, 'alleleSynonyms'):
-                synonyms = entity.alleleSynonyms
-            elif hasattr(entity, 'allele_synonyms'):
-                synonyms = entity.allele_synonyms
-        # Note: fish/agm entities typically don't have synonyms in the old implementation
+    # Get synonyms based on entity type
+    if entity_type in ['gene', 'protein']:
+        if hasattr(entity, 'geneSynonyms'):
+            synonyms = entity.geneSynonyms
+        elif hasattr(entity, 'gene_synonyms'):
+            synonyms = entity.gene_synonyms
+    elif entity_type == 'allele':
+        if hasattr(entity, 'alleleSynonyms'):
+            synonyms = entity.alleleSynonyms
+        elif hasattr(entity, 'allele_synonyms'):
+            synonyms = entity.allele_synonyms
+    # Note: fish/agm entities typically don't have synonyms in the old implementation
 
-        if synonyms:
-            for synonym in synonyms:
-                synonym_name = get_name_from_entity(synonym)
-                if synonym_name and synonym_name not in found_synonyms:
-                    found_synonyms.add(synonym_name)
-                    formatted_synonym = _apply_mod_formatting(synonym_name, mod, entity_type)
+    if synonyms:
+        for synonym in synonyms:
+            synonym_name = get_name_from_entity(synonym)
+            if synonym_name and synonym_name not in found_synonyms:
+                found_synonyms.add(synonym_name)
+                formatted_synonym = _apply_mod_formatting(synonym_name, mod, entity_type)
+                
+                # For WB, write to separate synonym file; for others, write to main file
+                if synonym_writer:
+                    # WB: separate synonym file
                     synonym_writer.write_entity(formatted_synonym)
+                else:
+                    # Other MODs: write synonym to main entity file with same prefix
+                    entity_writer.write_entity(formatted_synonym)
 
 
 class _EntityFileWriter:
@@ -392,6 +418,30 @@ class _EntityFileWriter:
             self.filename = f"gene_synonym_{filename_id}.obo"
             self.tp_prefix = f"tpgs{id_prefix}"
             self.root_name = "Gene Synonym"
+        elif entity_type == 'gene':
+            self.filename = f"{entity_type}_{filename_id}.obo"
+            self.tp_prefix = f"tpg{id_prefix}"
+            self.root_name = entity_type.capitalize()
+        elif entity_type == 'protein':
+            self.filename = f"{entity_type}_{filename_id}.obo"
+            self.tp_prefix = f"tpp{id_prefix}"
+            self.root_name = entity_type.capitalize()
+        elif entity_type == 'protein_synonym':
+            self.filename = f"protein_synonym_{filename_id}.obo"
+            self.tp_prefix = f"tpps{id_prefix}"
+            self.root_name = "Protein Synonym"
+        elif entity_type == 'allele':
+            self.filename = f"{entity_type}_{filename_id}.obo"
+            self.tp_prefix = f"tpa{id_prefix}"
+            self.root_name = entity_type.capitalize()
+        elif entity_type == 'strain':
+            self.filename = f"{entity_type}_{filename_id}.obo"
+            self.tp_prefix = f"tps{id_prefix}"
+            self.root_name = entity_type.capitalize()
+        elif entity_type == 'fish':
+            self.filename = f"{entity_type}_{filename_id}.obo"
+            self.tp_prefix = f"tpf{id_prefix}"
+            self.root_name = entity_type.capitalize()
         else:
             self.filename = f"{entity_type}_{filename_id}.obo"
             self.tp_prefix = f"tpg{id_prefix}"
