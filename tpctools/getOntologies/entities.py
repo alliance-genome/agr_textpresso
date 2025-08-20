@@ -122,7 +122,7 @@ def get_name_from_entity(entity_symbol: Any) -> Optional[str]:
     return None
 
 
-def generate_entity_list_from_a_team_api(mod: str, entity_type: str, generate_synonyms: bool = False,
+def generate_entity_list_from_a_team_api(mod: str, entity_type: str, store_synonyms_separately: bool = False,
                                          all_uppercase_file_name: Optional[str] = None) -> None:
     """
     Generate entity list files using AGRCurationAPIClient.
@@ -130,7 +130,7 @@ def generate_entity_list_from_a_team_api(mod: str, entity_type: str, generate_sy
     Args:
         mod: Model organism database (e.g., 'WB', 'MGI')
         entity_type: Type of entity to process ('gene', 'protein')
-        generate_synonyms: Whether to also generate synonym files (only used for WB)
+        store_synonyms_separately: Whether to also generate synonym files (only used for WB)
         all_uppercase_file_name: If provided, read entities from this file and generate uppercase versions
                                (used for WB proteins which are uppercase versions of genes)
     """
@@ -140,7 +140,7 @@ def generate_entity_list_from_a_team_api(mod: str, entity_type: str, generate_sy
     # Handle uppercase file generation (e.g., WB proteins from genes)
     if all_uppercase_file_name:
         _generate_uppercase_from_source_file(all_uppercase_file_name, entity_type, id_prefix,
-                                             species_name, filename_id, now, generate_synonyms)
+                                             species_name, filename_id, now, store_synonyms_separately)
         return
     
     api_client = _create_api_client()
@@ -149,7 +149,7 @@ def generate_entity_list_from_a_team_api(mod: str, entity_type: str, generate_sy
     entity_writer = _EntityFileWriter(entity_type, id_prefix, species_name, filename_id, now)
     # Only WB uses separate synonym files
     synonym_writer = (_EntityFileWriter(f"{entity_type}_synonym", id_prefix, species_name, filename_id, now)
-                      if generate_synonyms and mod == 'WB' else None)
+                      if store_synonyms_separately else None)
 
     try:
         _process_entities_from_api(api_client, mod, entity_type, entity_writer, synonym_writer)
@@ -396,10 +396,10 @@ def _process_single_entity(entity: Any, entity_type: str, mod: str,
                 
                 # For WB, write to separate synonym file; for others, write to main file
                 if synonym_writer:
-                    # WB: separate synonym file
+                    # separate synonym file
                     synonym_writer.write_entity(formatted_synonym)
                 else:
-                    # Other MODs: write synonym to main entity file with same prefix
+                    # write synonym to main entity file with same prefix
                     entity_writer.write_entity(formatted_synonym)
 
 
