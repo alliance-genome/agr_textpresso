@@ -13,6 +13,7 @@
 #include "TpOntApi.h"
 #include <Wt/WTableView>
 #include <Wt/WStandardItemModel>
+#include <Wt/WMemoryResource>
 
 class OntologyDisplay : public Wt::WContainerWidget {
     typedef std::multimap<std::string, std::string> mmsstype;
@@ -22,6 +23,7 @@ public:
     OntologyDisplay(const OntologyDisplay& orig);
     virtual ~OntologyDisplay();
 private:
+    Wt::WContainerWidget * dlc_;  // download links container
     Wt::WContainerWidget * ftc_;
     Wt::WComboBox * ftcolname_;
     Wt::WLineEdit * ftvalue_;
@@ -36,6 +38,9 @@ private:
     void SearchTermEntered(OntologyTermQuery *otc);
     void PopulateTable(PickCategoryContainer *pcc,
             std::string ftcolname, std::string ftvalue);
+    std::string GenerateOboContent(const std::string& category,
+            const std::vector<TpOntEntry*>& entries);
+    std::string GenerateHeaderContent(const std::string& category);
 };
 
 #endif /* ONTOLOGYDISPLAY_H */

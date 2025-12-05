@@ -13,8 +13,13 @@
 #include <Wt/WBreak>
 #include <Wt/WCssDecorationStyle>
 #include <Wt/WComboBox>
+#include <Wt/WAnchor>
+#include <Wt/WLink>
 #include <boost/algorithm/string/predicate.hpp>
+#include <boost/algorithm/string/replace.hpp>
 #include <thread>
+#include <sstream>
+#include <ctime>
 #include <pqxx/pqxx>
 
 #define CELLHEIGHT 2
@@ -47,6 +52,11 @@ namespace {
 OntologyDisplay::OntologyDisplay(PickCategoryContainer *pcc,
         OntologyTermQuery *otc, Wt::WLength h, Wt::WContainerWidget *parent)
 : Wt::WContainerWidget(parent) {
+    // Download links container (shown above filter when category is selected)
+    dlc_ = new Wt::WContainerWidget();
+    dlc_->hide();
+    addWidget(dlc_);
+    // Filter container
     ftc_ = new Wt::WContainerWidget();
     ftc_->hide();
     Wt::WText * ftlabel = new Wt::WText("Filter: ");
@@ -94,9 +104,75 @@ void OntologyDisplay::SelectionOkClicked(PickCategoryContainer *pcc) {
         PopulateTable(pcc, ftcolname_->currentText().toUTF8(),
         ftvalue_->text().toUTF8());
     }));
+
+    // Generate download links for selected category
+    dlc_->clear();
+    dlc_->hide();
+    std::set<Wt::WString> selected(pcc->GetSelected(false));  // false = don't include children
+    if (!selected.empty()) {
+        std::string cat = selected.begin()->toUTF8();
+        mmsstype cat2ont(pcc->GetTCB()->GetCat2Ont());
+        auto it = cat2ont.find(cat);
+        if (it != cat2ont.end()) {
+            std::string ont = it->second;
+            // Query all entries for this category
+            std::vector<TpOntEntry*> entries;
+            std::vector<std::string> st(GetAllSubTables(
+                    PGONTOLOGYTABLENAME + std::string("_") + ont));
+            for (auto xst : st) {
+                TpOntApi * toa = new TpOntApi(
+                        xst,
+                        PCRELATIONSTABLENAME + std::string("_") + ont,
+                        PADCRELATIONSTABLENAME + std::string("_") + ont);
+                toa->SearchDbString(TpOntApi::category, cat);
+                for (auto entry : toa->GetResultList()) {
+                    entries.push_back(new TpOntEntry(*entry));
+                }
+                delete toa;
+            }
+
+            if (!entries.empty()) {
+                // Generate OBO content
+                std::string oboContent = GenerateOboContent(cat, entries);
+                std::string headerContent = GenerateHeaderContent(cat);
+
+                // Create safe filename from category
+                std::string safeCat = cat;
+                boost::replace_all(safeCat, " ", "_");
+                boost::replace_all(safeCat, "(", "");
+                boost::replace_all(safeCat, ")", "");
+                boost::replace_all(safeCat, "/", "_");
+
+                // Create download link for OBO file
+                Wt::WMemoryResource * oboResource = new Wt::WMemoryResource("text/plain");
+                oboResource->setData(std::vector<unsigned char>(oboContent.begin(), oboContent.end()));
+                oboResource->suggestFileName(safeCat + ".obo");
+                Wt::WAnchor * oboAnchor = new Wt::WAnchor(Wt::WLink(oboResource), "Download OBO file");
+                oboAnchor->setTarget(Wt::TargetNewWindow);
+
+                // Create download link for header file
+                Wt::WMemoryResource * headerResource = new Wt::WMemoryResource("text/plain");
+                headerResource->setData(std::vector<unsigned char>(headerContent.begin(), headerContent.end()));
+                headerResource->suggestFileName(safeCat + ".headerobo");
+                Wt::WAnchor * headerAnchor = new Wt::WAnchor(Wt::WLink(headerResource), "Download header file");
+                headerAnchor->setTarget(Wt::TargetNewWindow);
+
+                dlc_->addWidget(oboAnchor);
+                dlc_->addWidget(new Wt::WText(" | "));
+                dlc_->addWidget(headerAnchor);
+                dlc_->show();
+            }
+
+            // Clean up entries
+            for (auto entry : entries) {
+                delete entry;
+            }
+        }
+    }
 }
 
 void OntologyDisplay::SearchTermEntered(OntologyTermQuery *otc) {
+    dlc_->hide();
     ftc_->hide();
     csc_->clear();
     statusline_ = new Wt::WText();
@@ -281,4 +357,51 @@ void OntologyDisplay::AddToModel(Wt::WStandardItemModel * model,
             }
     }
 
+}
+
+std::string OntologyDisplay::GenerateOboContent(const std::string& category,
+        const std::vector<TpOntEntry*>& entries) {
+    std::stringstream ss;
+
+    // Generate OBO format content
+    for (const auto& entry : entries) {
+        ss << "[Term]\n";
+        ss << "id: " << entry->GetEntryId() << "\n";
+        ss << "name: " << entry->GetTerm() << "\n";
+        if (!entry->GetCategory().empty()) {
+            ss << "is_a: " << category << "\n";
+        }
+        if (!entry->GetDbXref().empty()) {
+            ss << "xref: " << entry->GetDbXref() << "\n";
+        }
+        if (!entry->GetSource().empty()) {
+            ss << "def: \"From " << entry->GetSource() << "\" []\n";
+        }
+        ss << "\n";
+    }
+
+    return ss.str();
+}
+
+std::string OntologyDisplay::GenerateHeaderContent(const std::string& category) {
+    std::stringstream ss;
+
+    // Get current date
+    time_t now = time(0);
+    struct tm* timeinfo = localtime(&now);
+    char dateBuffer[80];
+    strftime(dateBuffer, sizeof(dateBuffer), "%d:%m:%Y %H:%M", timeinfo);
+
+    // Generate header in OBO format
+    ss << "format-version: 1.2\n";
+    ss << "data-version: " << dateBuffer << "\n";
+    ss << "date: " << dateBuffer << "\n";
+    ss << "saved-by: Textpresso\n";
+    ss << "\n";
+    ss << "[Term]\n";
+    ss << "id: Tp:0000000\n";
+    ss << "name: " << category << "\n";
+    ss << "\n";
+
+    return ss.str();
 }
