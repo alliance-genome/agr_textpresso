@@ -105,68 +105,71 @@ void OntologyDisplay::SelectionOkClicked(PickCategoryContainer *pcc) {
         ftvalue_->text().toUTF8());
     }));
 
-    // Generate download links for selected category
+    // Generate download links for selected category (including subcategories)
     dlc_->clear();
     dlc_->hide();
-    std::set<Wt::WString> selected(pcc->GetSelected(false));  // false = don't include children
-    if (!selected.empty()) {
-        std::string cat = selected.begin()->toUTF8();
-        mmsstype cat2ont(pcc->GetTCB()->GetCat2Ont());
-        auto it = cat2ont.find(cat);
-        if (it != cat2ont.end()) {
-            std::string ont = it->second;
-            // Query all entries for this category
-            std::vector<TpOntEntry*> entries;
-            std::vector<std::string> st(GetAllSubTables(
-                    PGONTOLOGYTABLENAME + std::string("_") + ont));
-            for (auto xst : st) {
-                TpOntApi * toa = new TpOntApi(
-                        xst,
-                        PCRELATIONSTABLENAME + std::string("_") + ont,
-                        PADCRELATIONSTABLENAME + std::string("_") + ont);
-                toa->SearchDbString(TpOntApi::category, cat);
-                for (auto entry : toa->GetResultList()) {
-                    entries.push_back(new TpOntEntry(*entry));
+    std::set<Wt::WString> selectedWithChildren(pcc->GetSelected(true));  // true = include children
+    std::set<Wt::WString> selectedOnly(pcc->GetSelected(false));  // false = just the selected node
+    if (!selectedOnly.empty()) {
+        std::string mainCat = selectedOnly.begin()->toUTF8();  // The main selected category name
+
+        // Query all ontology members and search for entries in all selected categories
+        std::vector<TpOntEntry*> entries;
+        PgList ontmembers(PGONTOLOGY, ONTOLOGYMEMBERSTABLENAME);
+        for (const auto& cat : selectedWithChildren) {
+            std::string catStr = cat.toUTF8();
+            for (const auto& ont : ontmembers.GetList()) {
+                std::vector<std::string> st(GetAllSubTables(
+                        PGONTOLOGYTABLENAME + std::string("_") + ont));
+                for (const auto& xst : st) {
+                    TpOntApi * toa = new TpOntApi(
+                            xst,
+                            PCRELATIONSTABLENAME + std::string("_") + ont,
+                            PADCRELATIONSTABLENAME + std::string("_") + ont);
+                    toa->SearchDbString(TpOntApi::category, catStr);
+                    for (auto entry : toa->GetResultList()) {
+                        entries.push_back(new TpOntEntry(*entry));
+                    }
+                    delete toa;
                 }
-                delete toa;
             }
+        }
 
-            if (!entries.empty()) {
-                // Generate OBO content
-                std::string oboContent = GenerateOboContent(cat, entries);
-                std::string headerContent = GenerateHeaderContent(cat);
+        if (!entries.empty()) {
+            // Generate OBO content
+            std::string oboContent = GenerateOboContent(mainCat, entries);
+            std::string headerContent = GenerateHeaderContent(mainCat);
 
-                // Create safe filename from category
-                std::string safeCat = cat;
-                boost::replace_all(safeCat, " ", "_");
-                boost::replace_all(safeCat, "(", "");
-                boost::replace_all(safeCat, ")", "");
-                boost::replace_all(safeCat, "/", "_");
+            // Create safe filename from category
+            std::string safeCat = mainCat;
+            boost::replace_all(safeCat, " ", "_");
+            boost::replace_all(safeCat, "(", "");
+            boost::replace_all(safeCat, ")", "");
+            boost::replace_all(safeCat, "/", "_");
 
-                // Create download link for OBO file
-                Wt::WMemoryResource * oboResource = new Wt::WMemoryResource("text/plain");
-                oboResource->setData(std::vector<unsigned char>(oboContent.begin(), oboContent.end()));
-                oboResource->suggestFileName(safeCat + ".obo");
-                Wt::WAnchor * oboAnchor = new Wt::WAnchor(Wt::WLink(oboResource), "Download OBO file");
-                oboAnchor->setTarget(Wt::TargetNewWindow);
+            // Create download link for OBO file
+            Wt::WMemoryResource * oboResource = new Wt::WMemoryResource("text/plain");
+            oboResource->setData(std::vector<unsigned char>(oboContent.begin(), oboContent.end()));
+            oboResource->suggestFileName(safeCat + ".obo");
+            Wt::WAnchor * oboAnchor = new Wt::WAnchor(Wt::WLink(oboResource), "Download OBO file");
+            oboAnchor->setTarget(Wt::TargetNewWindow);
 
-                // Create download link for header file
-                Wt::WMemoryResource * headerResource = new Wt::WMemoryResource("text/plain");
-                headerResource->setData(std::vector<unsigned char>(headerContent.begin(), headerContent.end()));
-                headerResource->suggestFileName(safeCat + ".headerobo");
-                Wt::WAnchor * headerAnchor = new Wt::WAnchor(Wt::WLink(headerResource), "Download header file");
-                headerAnchor->setTarget(Wt::TargetNewWindow);
+            // Create download link for header file
+            Wt::WMemoryResource * headerResource = new Wt::WMemoryResource("text/plain");
+            headerResource->setData(std::vector<unsigned char>(headerContent.begin(), headerContent.end()));
+            headerResource->suggestFileName(safeCat + ".headerobo");
+            Wt::WAnchor * headerAnchor = new Wt::WAnchor(Wt::WLink(headerResource), "Download header file");
+            headerAnchor->setTarget(Wt::TargetNewWindow);
 
-                dlc_->addWidget(oboAnchor);
-                dlc_->addWidget(new Wt::WText(" | "));
-                dlc_->addWidget(headerAnchor);
-                dlc_->show();
-            }
+            dlc_->addWidget(oboAnchor);
+            dlc_->addWidget(new Wt::WText(" | "));
+            dlc_->addWidget(headerAnchor);
+            dlc_->show();
+        }
 
-            // Clean up entries
-            for (auto entry : entries) {
-                delete entry;
-            }
+        // Clean up entries
+        for (auto entry : entries) {
+            delete entry;
         }
     }
 }
