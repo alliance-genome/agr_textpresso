@@ -6,7 +6,7 @@ import gzip
 from datetime import datetime, timedelta
 from os import environ, path, remove, makedirs
 
-from fastapi_okta.okta_utils import get_authentication_token, generate_headers
+from agr_congnito_py import get_authentication_token, generate_headers
 
 logging.basicConfig(format='%(message)s')
 logger = logging.getLogger(__name__)

@@ -8,3 +8,4 @@ python-dateutil
 
 agr-curation-api-client==0.7.8
 
+agr_cognito_py==0.1.0
