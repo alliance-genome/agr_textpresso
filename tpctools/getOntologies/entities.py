@@ -237,7 +237,7 @@ def _process_entities_from_api(api_client: AGRCurationAPIClient, mod: str, entit
             print(f"Page {current_page}: Entities: {entity_writer.records_count}, "
                   f"Synonyms: {synonym_writer.records_count if synonym_writer else 0}")
 
-            if len(entities) == 0:
+            if len(entities) < PAGE_LIMIT:
                 break
 
         except Exception as e:
@@ -250,9 +250,18 @@ def _process_entities_from_api(api_client: AGRCurationAPIClient, mod: str, entit
 def _fetch_entities_page(api_client: AGRCurationAPIClient, mod: str, entity_type: str, page: int, updated_after=None):
     """Fetch a single page of entities from the API."""
     if entity_type in ['gene', 'protein']:
-        return api_client.get_genes(data_provider=mod, limit=PAGE_LIMIT, page=page, updated_after=updated_after,
-                                    include_obsolete=True)
+        return api_client.get_genes(data_provider=mod, limit=PAGE_LIMIT, page=page, updated_after=updated_after)
     elif entity_type == 'allele':
+        # WB extraction subset: force DB + correct params
+        if mod == 'WB':
+            return api_client.get_alleles(
+                taxon='NCBITaxon:6239',
+                limit=PAGE_LIMIT,
+                offset=page * PAGE_LIMIT,
+                wb_extraction_subset=True,
+                data_source='db'
+            )
+        # other MODs: use normal API/GraphQL path
         return api_client.get_alleles(data_provider=mod, limit=PAGE_LIMIT, page=page, updated_after=updated_after)
     elif entity_type == 'fish':
         return api_client.get_agms(data_provider=mod, subtype="fish", limit=PAGE_LIMIT, page=page,
