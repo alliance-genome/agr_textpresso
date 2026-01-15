@@ -38,7 +38,7 @@ def get_category_data(mod, download_all=False):
         # Generate proteins as uppercase versions of genes (no API call needed)
         generate_entity_list_from_a_team_api(mod, 'protein', store_synonyms_separately=True,
                                              all_uppercase_file_name=f'gene_{filename_id}.obo')
-        update_entity_list_from_ateam_api(mod, 'allele')
+        generate_entity_list_from_a_team_api(mod, 'allele')
     elif mod == 'MGI':
         generate_entity_list_from_a_team_api(mod, 'gene')
     elif mod == 'ZFIN':
