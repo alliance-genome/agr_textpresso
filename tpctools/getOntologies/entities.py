@@ -15,6 +15,16 @@ from dateutil.relativedelta import relativedelta
 
 PAGE_LIMIT = 1000
 
+MOD_TAXON_MAPPING = {
+    'RGD': 'NCBITaxon:10116',
+    'MGI': 'NCBITaxon:10090',
+    'ZFIN': 'NCBITaxon:7955',
+    'WB': 'NCBITaxon:6239',
+    'SGD': 'NCBITaxon:559292',
+    'FB': 'NCBITaxon:7227',
+
+}
+
 
 def get_id_prefix_species_name(mod: str) -> tuple[str, str, str]:
     """Get ID prefix, species name, and filename ID for a given MOD."""
@@ -152,7 +162,8 @@ def generate_entity_list_from_a_team_api(mod: str, entity_type: str, store_synon
                       if store_synonyms_separately else None)
 
     try:
-        _process_entities_from_api(api_client, mod, entity_type, entity_writer, synonym_writer)
+        _process_entities_from_api(api_client, mod, entity_type, entity_writer, synonym_writer,
+                                   taxon=MOD_TAXON_MAPPING.get(mod))
     finally:
         entity_writer.close()
         if synonym_writer:
@@ -214,15 +225,16 @@ def _apply_mod_formatting(name: str, mod: str, entity_type: str) -> str:
 
 
 def _process_entities_from_api(api_client: AGRCurationAPIClient, mod: str, entity_type: str,
-                               entity_writer: '_EntityFileWriter',
-                               synonym_writer: Optional['_EntityFileWriter']) -> None:
+                               entity_writer: '_EntityFileWriter', synonym_writer: Optional['_EntityFileWriter'],
+                               taxon: str = None) -> None:
     """Process entities from API with pagination."""
     current_page = 0
     found_synonyms: Set[str] = set()
 
     while True:
         try:
-            entities = _fetch_entities_page(api_client, mod, entity_type, current_page)
+            entities = _fetch_entities_page(api_client=api_client, mod=mod, entity_type=entity_type,
+                                            page=current_page, taxon=taxon)
             if not entities:
                 print(f"No entities returned for {entity_type} page {current_page}")
                 break
@@ -247,12 +259,23 @@ def _process_entities_from_api(api_client: AGRCurationAPIClient, mod: str, entit
             break
 
 
-def _fetch_entities_page(api_client: AGRCurationAPIClient, mod: str, entity_type: str, page: int, updated_after=None):
+def _fetch_entities_page(api_client: AGRCurationAPIClient, mod: str, entity_type: str, page: int, updated_after=None,
+                         taxon: str = None) -> list[Any]:
     """Fetch a single page of entities from the API."""
     if entity_type in ['gene', 'protein']:
         return api_client.get_genes(data_provider=mod, limit=PAGE_LIMIT, page=page, updated_after=updated_after,
-                                    include_obsolete=True)
+                                    include_obsolete=True, taxon=taxon)
     elif entity_type == 'allele':
+        # WB extraction subset: force DB + correct params
+        if mod == 'WB':
+            return api_client.get_alleles(
+                taxon='NCBITaxon:6239',
+                limit=PAGE_LIMIT,
+                offset=page * PAGE_LIMIT,
+                wb_extraction_subset=True,
+                data_source='db'
+            )
+        # other MODs: use normal API/GraphQL path
         return api_client.get_alleles(data_provider=mod, limit=PAGE_LIMIT, page=page, updated_after=updated_after)
     elif entity_type == 'fish':
         return api_client.get_agms(data_provider=mod, subtype="fish", limit=PAGE_LIMIT, page=page,
@@ -278,7 +301,8 @@ def _collect_updated_entities(api_client: AGRCurationAPIClient, mod: str, entity
 
     while True:
         try:
-            entities = _fetch_entities_page(api_client, mod, entity_type, current_page, date_two_months_ago)
+            entities = _fetch_entities_page(api_client=api_client, mod=mod, entity_type=entity_type, page=current_page,
+                                            updated_after=date_two_months_ago, taxon=MOD_TAXON_MAPPING.get(mod))
             if not entities:
                 break
 
