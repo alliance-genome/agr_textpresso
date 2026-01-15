@@ -264,7 +264,7 @@ def _fetch_entities_page(api_client: AGRCurationAPIClient, mod: str, entity_type
     """Fetch a single page of entities from the API."""
     if entity_type in ['gene', 'protein']:
         return api_client.get_genes(data_provider=mod, limit=PAGE_LIMIT, page=page, updated_after=updated_after,
-                                    include_obsolete=True, taxon=taxon)
+                                    include_obsolete=True, taxon=taxon, data_source="graphql")
     elif entity_type == 'allele':
         # WB extraction subset: force DB + correct params
         if mod == 'WB':
