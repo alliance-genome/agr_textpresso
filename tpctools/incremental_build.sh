@@ -1,96 +1,140 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
-raw_file_dir="/data/textpresso/raw_files_new"
-raw_file_past_week_dir="/data/textpresso/raw_files_past_week"
-cas1_dir="/data/textpresso/tpcas-1_new"
-cas2_dir="/data/textpresso/tpcas-2_new"
-index_dir="/data/textpresso/luceneindex_new"
-
-rm -rf "${raw_file_dir}"
-rm -rf "${cas1_dir}"
-rm -rf "${cas2_dir}"
-rm -rf "${index_dir}"
-
-## downloading pdfs and generating bib files
-
-conda run -n agr_textpresso python3 /data/textpresso/tpctools/getPdfBiblio/download_pdfs_bib_files.py -m "${MOD}" -d 6 -p "${raw_file_dir}"
-
-echo "DONE downloading PDFs and generating bib files!"
-
-rsync -av "${raw_file_past_week_dir}/" "${raw_file_dir}/"
-
-echo -n "Total new PDF file(s): "
-find "${raw_file_dir}/pdf" -maxdepth 3 -name "*.pdf" | wc -l
-
-# Count the total number of PDF files in raw_file_dir
-total_pdfs=$(find "${raw_file_dir}/pdf" -maxdepth 3 -name "*.pdf" | wc -l)
-
-# Check if the total number of PDFs is less than 4
-if [ "$total_pdfs" -lt 4 ]; then
-    # Move raw_file_dir to raw_file_past_week_dir and exit
-    # wait for next week to process them
-    rsync -av "${raw_file_dir}/" "${raw_file_past_week_dir}/"
-    echo "Less than 4 PDFs found. Moved files to raw_file_past_week_dir and exiting."
-    rm -rf "${raw_file_dir}"
-    exit 0
-else
-    # Remove all files in raw_file_past_week_dir
-    rm -r "${raw_file_past_week_dir}"/*
-    echo "4 or more PDFs found. Cleared raw_file_past_week_dir."
+# -----------------------------
+# Config
+# -----------------------------
+MOD="${MOD:-}"
+if [[ -z "${MOD}" ]]; then
+  echo "ERROR: MOD env var is not set (e.g. MOD=WB)"
+  exit 1
 fi
 
-# convert pdf2txt
-convert_text "${raw_file_dir}"
+BASE="/data/textpresso"
+RAW_MAIN="${BASE}/raw_files"
+CAS1_MAIN="${BASE}/tpcas-1"
+CAS2_MAIN="${BASE}/tpcas-2"
+PAST_WEEK="${BASE}/raw_files_past_week"
 
-## generating CAS-1 files
+# Staging (timestamped so we never clobber another run)
+RUN_ID="$(date +%Y%m%d_%H%M%S)"
+STAGE_RAW="${BASE}/raw_files_new_${RUN_ID}"
+STAGE_CAS1="${BASE}/tpcas-1_new_${RUN_ID}"
+STAGE_CAS2="${BASE}/tpcas-2_new_${RUN_ID}"
 
-tokenize -P 4 -p "${raw_file_dir}/pdf" -c ${cas1_dir}
+LOCKFILE="${BASE}/tmp/incremental_build.lock"
+LOG_PREFIX="[incremental_build ${RUN_ID}]"
 
-echo "DONE generating cas-1 files!" 
+cleanup_on_success() {
+  rm -rf "${STAGE_RAW}" "${STAGE_CAS1}" "${STAGE_CAS2}"
+  rm -f "${LOCKFILE}"
+}
 
-echo -n "Total new CAS-1 file(s): "
-find "${cas1_dir}" -maxdepth 3 -name "*.tpcas*" | wc -l
+fail_handler() {
+  local ec=$?
+  echo "${LOG_PREFIX} ERROR: build failed (exit code ${ec})."
+  echo "${LOG_PREFIX} Staging dirs preserved for debugging:"
+  echo "  ${STAGE_RAW}"
+  echo "  ${STAGE_CAS1}"
+  echo "  ${STAGE_CAS2}"
+  rm -f "${LOCKFILE}"
+  exit "${ec}"
+}
 
-echo -n "Empty CAS-1 file(s): "
-find "${cas1_dir}"  -maxdepth 3 -type f -name "*.tpcas.gz" -exec ls -l {} \; | grep " 0 " | wc -l
+trap fail_handler ERR
+trap 'rm -f "${LOCKFILE}"' INT TERM
 
-## generating CAS-2 files
-
-annotate -P 2 -c ${cas1_dir} -C ${cas2_dir}
-
-echo "DONE cas-2 files generation!"
-
-echo -n "Total new CAS-2 file(s): "                                                                                                                               
-find "${cas2_dir}" -maxdepth 3 -name "*.tpcas*" | wc -l 
-find "${cas2_dir}" -maxdepth 3 -name "*.tpcas*"
- 
-echo -n "Empty CAS-2 file(s): "                                                                                                                                    
-find "${cas2_dir}"  -maxdepth 3 -type f -name "*.tpcas.gz" -exec ls -l {} \; | grep " 48 " | wc -l
-
-## syncing bib files
-     
-rsync -av "${raw_file_dir}/bib/" "${cas2_dir}/"
-
-echo "DONE transferring bib files over to tpcas-2 folder!"
-
-# copy files to main dirs
-rsync -av "${raw_file_dir}/" "/data/textpresso/raw_files/"
-rsync -av "${cas1_dir}/" "/data/textpresso/tpcas-1/"
-rsync -av "${cas2_dir}/" "/data/textpresso/tpcas-2/"
-
-if [[ ${MOD} == 'WB' ]]; then
-   # indexing all papers to avoid duplicates
-   index
-else
-   # indexing the new papers only
-   /data/textpresso/tpctools/incremental_index.sh -C "${cas2_dir}"
+# Lock
+if [[ -e "${LOCKFILE}" ]]; then
+  echo "${LOG_PREFIX} ERROR: lockfile exists (${LOCKFILE}). Another run may be in progress."
+  exit 1
 fi
-echo "DONE indexing!"
+mkdir -p "$(dirname "${LOCKFILE}")"
+touch "${LOCKFILE}"
 
-conda run -n agr_textpresso python3 /data/textpresso/tpctools/send_report.py
+echo "${LOG_PREFIX} Starting for MOD=${MOD}"
 
-# remove temp files
-rm -rf "${raw_file_dir}"
-rm -rf "${cas1_dir}"
-rm -rf "${cas2_dir}"
-rm -rf "${index_dir}"
+# -----------------------------
+# Stage: download PDFs + bibs
+# -----------------------------
+rm -rf "${STAGE_RAW}" "${STAGE_CAS1}" "${STAGE_CAS2}"
+mkdir -p "${STAGE_RAW}"
+
+conda run -n agr_textpresso python3 \
+  "${BASE}/tpctools/getPdfBiblio/download_pdfs_bib_files.py" \
+  -m "${MOD}" -d 14 -p "${STAGE_RAW}"
+
+echo "${LOG_PREFIX} DONE downloading PDFs and generating bib files!"
+
+# Bring forward last week leftovers into staging
+mkdir -p "${PAST_WEEK}"
+rsync -a "${PAST_WEEK}/" "${STAGE_RAW}/" || true
+
+# Count PDFs
+total_pdfs="$(find "${STAGE_RAW}/pdf" -maxdepth 3 -name "*.pdf" 2>/dev/null | wc -l | tr -d ' ')"
+echo "${LOG_PREFIX} Total staged PDF file(s): ${total_pdfs}"
+
+if [[ "${total_pdfs}" -lt 4 ]]; then
+  echo "${LOG_PREFIX} <4 PDFs; carrying forward to next week and exiting."
+  rsync -a "${STAGE_RAW}/" "${PAST_WEEK}/"
+  rm -rf "${STAGE_RAW}"
+  rm -f "${LOCKFILE}"
+  exit 0
+fi
+
+# Clear past week only once we know we're proceeding
+rm -rf "${PAST_WEEK:?}/"* || true
+echo "${LOG_PREFIX} Proceeding; cleared ${PAST_WEEK}"
+
+# -----------------------------
+# Stage: pdf2txt + CAS generation
+# -----------------------------
+convert_text "${STAGE_RAW}"
+
+tokenize -P 4 -p "${STAGE_RAW}/pdf" -c "${STAGE_CAS1}"
+echo "${LOG_PREFIX} DONE generating CAS-1 files!"
+
+annotate -P 2 -c "${STAGE_CAS1}" -C "${STAGE_CAS2}"
+echo "${LOG_PREFIX} DONE generating CAS-2 files!"
+
+# Copy bibs into CAS2 staging
+rsync -a "${STAGE_RAW}/bib/" "${STAGE_CAS2}/"
+echo "${LOG_PREFIX} DONE transferring bib files into staged CAS-2!"
+
+# Optional sanity checks (fail fast)
+empty_cas1="$(find "${STAGE_CAS1}" -maxdepth 3 -type f -name "*.tpcas.gz" -exec ls -l {} \; | awk '$5==0{c++} END{print c+0}')"
+empty_cas2="$(find "${STAGE_CAS2}" -maxdepth 3 -type f -name "*.tpcas.gz" -exec ls -l {} \; | awk '$5==48{c++} END{print c+0}')"
+echo "${LOG_PREFIX} Empty CAS-1 count: ${empty_cas1}"
+echo "${LOG_PREFIX} Empty CAS-2 count: ${empty_cas2}"
+
+# If you want to hard-fail on empties, uncomment:
+# if [[ "${empty_cas2}" -gt 0 ]]; then
+#   echo "${LOG_PREFIX} ERROR: Found empty CAS-2 files (${empty_cas2}). Aborting before syncing to main dirs."
+#   exit 1
+# fi
+
+# -----------------------------
+# Commit: sync staging -> main (only after success so far)
+# -----------------------------
+echo "${LOG_PREFIX} Sync staging to main dirs..."
+
+rsync -av "${STAGE_RAW}/"  "${RAW_MAIN}/"
+rsync -av "${STAGE_CAS1}/" "${CAS1_MAIN}/"
+rsync -av "${STAGE_CAS2}/" "${CAS2_MAIN}/"
+
+echo "${LOG_PREFIX} DONE syncing staged data to main dirs."
+
+# -----------------------------
+# Index: same logic for all MODs (full index)
+# -----------------------------
+echo "${LOG_PREFIX} Starting index (full) ..."
+index
+echo "${LOG_PREFIX} DONE indexing!"
+
+# Report
+conda run -n agr_textpresso python3 "${BASE}/tpctools/send_report.py"
+echo "${LOG_PREFIX} DONE report."
+
+# Cleanup only on full success
+cleanup_on_success
+echo "${LOG_PREFIX} All done."
