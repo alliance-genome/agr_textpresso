@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(aws elbv2:*)",
+      "Bash(aws ec2:*)",
+      "Bash(cdk init:*)",
+      "Bash(source:*)"
+    ]
+  }
+}

@@ -1,48 +1,69 @@
-# Project: Cognito CDK
+# Cognito3 - Textpresso ALB Authentication
 
-AWS CDK Python project that deploys an ALB with Cognito authentication fronting 5 EC2 instances.
+## Project Overview
+
+CDK Python stack that adds Cognito User Pool authentication to the existing `textpresso-lb` Application Load Balancer. This replaces the previous secret-header-based access control with OAuth2/Cognito login.
 
 ## Architecture
 
-- **VPC** with public/private subnets across 3 AZs, 1 NAT gateway
-- **Cognito User Pool** with email sign-in, self-signup, email verification
-- **Application Load Balancer** (internet-facing) with HTTPS listener using Cognito auth action, HTTP->HTTPS redirect
-- **Auto Scaling Group** with 5 t3.micro EC2 instances (Amazon Linux 2023, Apache httpd) in private subnets
-- **ACM Certificate** for TLS (DNS validation)
+- **ALB**: `textpresso-lb` (existing, internet-facing, us-east-1)
+- **Cognito User Pool**: "Textpresso Users" — self-signup enabled, email sign-in
+- **Cognito Domain**: `textpresso-auth.auth.us-east-1.amazoncognito.com`
+- **Target Groups**: 5 existing groups (fb, zfin, mgi, wb, sgd), all routing to a single EC2 instance `i-05cafb26fe07db120`
+- **Listener Rules**: Host-based routing with `authenticate-cognito` action before forwarding
 
-## Project Structure
+### Host → Target Group Mapping
 
-```
-app.py                  # CDK app entrypoint
-cdk/cdk_stack.py        # Main stack definition (all resources)
-cdk/__init__.py
-tests/unit/             # Unit tests
-cdk.json                # CDK config and feature flags
-requirements.txt        # Python dependencies (aws-cdk-lib, constructs)
-```
+| Host | Target Group | Priority |
+|------|-------------|----------|
+| fb-textpresso.alliancegenome.org | textpresso-fb | 96 |
+| zfin-textpresso.alliancegenome.org | textpresso-zfin | 97 |
+| mgi-textpresso.alliancegenome.org | textpresso-mgi | 98 |
+| wb-textpresso.alliancegenome.org | textpresso-wb | 99 |
+| sgd-textpresso.alliancegenome.org | textpresso-sgd | 100 |
+
+## AWS Account
+
+- **Account**: 100225593120
+- **Region**: us-east-1
+- **VPC**: vpc-55522232
 
 ## Commands
 
 ```bash
-source .venv/bin/activate          # Activate virtualenv
-pip install -r requirements.txt    # Install dependencies
-npx cdk synth                      # Synthesize CloudFormation template
-npx cdk deploy                     # Deploy stack
-npx cdk diff                       # Compare deployed vs local
-npx cdk destroy                    # Tear down stack
+source .venv/bin/activate
+pip install -r requirements.txt
+cdk synth    # generate CloudFormation template
+cdk diff     # preview changes
+cdk deploy   # deploy stack
 ```
 
-## Before Deploying
+## Deployment Workflow
 
-Update these placeholders in `cdk/cdk_stack.py`:
+```bash
+./backup-rules.sh       # 1. Save current listener rules to listener-rules-backup.json
+./delete-old-rules.sh   # 2. Delete old rules (priorities 96-100) — prompts for confirmation
+cdk deploy              # 3. Deploy Cognito auth rules
+```
 
-1. `domain_prefix` — Cognito domain prefix (must be globally unique)
-2. `domain_name` — Your actual domain for the ACM certificate
-3. `callback_urls` — Set to `https://<your-domain>/oauth2/idpresponse`
+## Rollback Workflow
 
-## Conventions
+If the deployment doesn't work, restore the previous configuration:
 
-- Language: Python 3.12
-- CDK version: aws-cdk-lib >=2.241.0
-- One stack (`CdkStack`) containing all resources
-- L2 constructs preferred over L1 (Cfn) where available
+```bash
+cdk destroy             # Remove CDK-managed Cognito rules
+./restore-rules.sh      # Recreate original secret-header rules from backup
+```
+
+## Scripts
+
+- **`backup-rules.sh`** — Exports current listener rules to `listener-rules-backup.json`
+- **`delete-old-rules.sh`** — Deletes old rules (refuses to run without a backup)
+- **`restore-rules.sh`** — Recreates original rules from `listener-rules-backup.json`
+
+## Deployment Notes
+
+- The existing ALB listener rules (priorities 96-100) use secret-header conditions and are managed outside this stack. They must be **deleted manually** (via `delete-old-rules.sh`) before deploying to avoid priority conflicts.
+- The ALB's default action (403 fixed response) is not managed by this stack.
+- The User Pool has `RemovalPolicy.RETAIN` to prevent accidental deletion of user data.
+- `listener-rules-backup.json` is critical for rollback — do not delete it until the new setup is verified.

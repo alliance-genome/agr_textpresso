@@ -1,110 +1,124 @@
-# Cognito-Authenticated ALB with EC2 Instances
+# Textpresso Cognito Authentication
 
-AWS CDK (Python) project that adds Cognito-based authentication to an existing Application Load Balancer and registers existing EC2 instances behind it.
+AWS CDK stack that adds Cognito User Pool authentication to the `textpresso-lb` Application Load Balancer, replacing the previous secret-header-based access control with OAuth2/Cognito login.
 
-## Architecture
+## What This Stack Creates
 
-```
-                    ┌──────────────┐
-   User ──HTTPS──> │  Existing    │
-                    │  ALB         │
-                    │ (+ Cognito   │
-                    │  Auth Action)│
-                    └──────┬───────┘
-                           │
-              ┌────────────┼────────────┐
-              │            │            │
-         ┌────┴───┐  ┌────┴───┐  ┌────┴───┐
-         │  EC2   │  │  EC2   │  │  EC2   │  ... (existing instances)
-         │  (i-…) │  │  (i-…) │  │  (i-…) │
-         └────────┘  └────────┘  └────────┘
-           (Existing Instances)
-```
+- **Cognito User Pool** ("Textpresso Users") with self-signup, email verification, and strong password policy
+- **Cognito Hosted UI Domain** at `textpresso-auth.auth.us-east-1.amazoncognito.com`
+- **ALB App Client** with OAuth2 authorization code grant and callback URLs for all 5 hosts
+- **ALB Listener Rules** (priorities 96-100) with `authenticate-cognito` action before forwarding to existing target groups
 
-**Imported (existing) resources:**
+### Protected Hosts
 
-- **VPC** — Looked up by VPC ID
-- **Application Load Balancer** — Imported by ARN and security group
-- **ACM Certificate** — Imported by ARN
-- **EC2 Instances** — Registered as targets by instance ID
-
-**Created by CDK:**
-
-- **Cognito User Pool** — Email-based sign-in, self-signup, auto-verified email
-- **Cognito User Pool Client** — Authorization code grant with OpenID/email/profile scopes
-- **Cognito User Pool Domain** — Hosted UI for the authentication flow
-- **Target Group** — Registers existing EC2 instances on port 80
-- **HTTPS Listener** — Cognito auth action forwarding to target group
-- **HTTP Listener** — Redirects to HTTPS
+| Host | Target Group |
+|------|-------------|
+| fb-textpresso.alliancegenome.org | textpresso-fb |
+| zfin-textpresso.alliancegenome.org | textpresso-zfin |
+| mgi-textpresso.alliancegenome.org | textpresso-mgi |
+| wb-textpresso.alliancegenome.org | textpresso-wb |
+| sgd-textpresso.alliancegenome.org | textpresso-sgd |
 
 ## Prerequisites
 
-- Python 3.12+
-- Node.js 18+ (for the CDK CLI)
-- AWS CLI configured with valid credentials
-- An existing ALB, VPC, ACM certificate, and EC2 instances in your AWS account
-- EC2 instances must allow inbound port 80 from the ALB's security group
+- Python 3.8+
+- AWS CDK CLI (`npm install -g aws-cdk`)
+- AWS credentials configured for account `100225593120` (us-east-1)
+- Existing ALB listener rules (priorities 96-100) must be deleted before deploying
 
 ## Setup
 
 ```bash
-# Create and activate virtualenv
 python3 -m venv .venv
 source .venv/bin/activate
-
-# Install dependencies
 pip install -r requirements.txt
 ```
 
-## Configuration
-
-Before deploying, update the constants at the top of `cdk/cdk_stack.py`:
-
-| Constant | What to set |
-|---|---|
-| `EXISTING_ALB_ARN` | Your ALB's ARN |
-| `EXISTING_ALB_SG_ID` | Security group attached to the ALB |
-| `EXISTING_VPC_ID` | VPC the ALB lives in |
-| `EXISTING_CERTIFICATE_ARN` | ACM certificate ARN already on the ALB |
-| `EXISTING_INSTANCE_IDS` | List of EC2 instance IDs to register as targets |
-| `COGNITO_DOMAIN_PREFIX` | Globally unique prefix for Cognito hosted UI |
-| `CALLBACK_DOMAIN` | Your domain pointing to the ALB |
-
-## Deploy
+## Deployment
 
 ```bash
-# Synthesize CloudFormation template
-npx cdk synth
+# 1. Backup current listener rules
+./backup-rules.sh
 
-# Review changes
-npx cdk diff
+# 2. Delete old secret-header rules (prompts for confirmation)
+./delete-old-rules.sh
 
-# Deploy to AWS
-npx cdk deploy
+# 3. Preview changes
+cdk diff
+
+# 4. Deploy the Cognito auth stack
+cdk deploy
 ```
 
-After deployment, the stack outputs the User Pool ID and User Pool Client ID.
+## Rollback
 
-## Auth Flow
-
-1. User navigates to the ALB URL
-2. ALB redirects to the Cognito Hosted UI for sign-in/sign-up
-3. User authenticates (email + password)
-4. Cognito redirects back to the ALB with an authorization code
-5. ALB exchanges the code for tokens and forwards the request to a backend EC2 instance
-
-## Tear Down
+If the deployment doesn't work, restore the previous configuration:
 
 ```bash
-npx cdk destroy
+# 1. Remove CDK-managed resources
+cdk destroy
+
+# 2. Recreate original secret-header rules from backup
+./restore-rules.sh
 ```
 
-## Useful Commands
+## Scripts
 
-| Command | Description |
-|---|---|
-| `npx cdk synth` | Emit the synthesized CloudFormation template |
-| `npx cdk deploy` | Deploy the stack to your AWS account/region |
-| `npx cdk diff` | Compare deployed stack with current state |
-| `npx cdk destroy` | Delete the stack and all resources |
-| `npx cdk ls` | List all stacks in the app |
+| Script | Description |
+|--------|-------------|
+| `backup-rules.sh` | Exports current listener rules to `listener-rules-backup.json` |
+| `delete-old-rules.sh` | Deletes old rules (refuses to run without a backup) |
+| `restore-rules.sh` | Recreates original rules from backup |
+
+## Stack Outputs
+
+| Output | Description |
+|--------|-------------|
+| UserPoolId | Cognito User Pool ID |
+| UserPoolClientId | App client ID for the ALB |
+| CognitoDomain | Cognito hosted UI URL |
+
+## Authentication Flow
+
+1. User visits any of the 5 textpresso hosts
+2. ALB redirects unauthenticated users to the Cognito hosted login page
+3. User signs up or logs in with email/password
+4. Cognito redirects back to the ALB callback URL with an authorization code
+5. ALB exchanges the code for tokens and forwards the request to the target group
+
+## Important Considerations
+
+### Cognito Domain Prefix
+
+The domain prefix `textpresso-auth` must be globally unique across all AWS accounts. If deployment fails on this resource, choose a different prefix in `cognito3_stack.py`.
+
+### Programmatic Access
+
+The previous secret-header approach allowed bots, scripts, and services to access the textpresso hosts by sending the `alliance-textpresso-secret` header. Cognito authentication requires a browser-based OAuth flow — any automated clients using the secret header will stop working after deployment.
+
+### Cookie / Header Size Limits
+
+The ALB sets `AWSELBAuthSessionCookie` cookies containing JWT tokens, which can be large. If the textpresso applications also set large cookies or headers, you may hit the ALB's 16KB header size limit, resulting in 400 errors.
+
+### Session Timeout
+
+The default ALB-Cognito session duration is 7 days (604800 seconds). Users won't need to re-authenticate for a week. This can be tuned via the `session_timeout` parameter on `AuthenticateCognitoAction` in `cognito3_stack.py`.
+
+### CORS / AJAX Requests
+
+If the textpresso applications make cross-origin or AJAX requests, the Cognito redirect (302) will not work for those calls — they will fail silently. This only matters if there are frontend API calls between the hosts.
+
+### Self-Signup Is Open
+
+Self-signup is enabled, meaning anyone with an email address can register. To restrict access to specific users or email domains, add a Cognito pre-sign-up Lambda trigger to validate registrations.
+
+### Health Checks
+
+ALB health checks (`/tpc` on port 80) go directly to the target instance, not through listener rules, so Cognito auth will not interfere with them.
+
+## Deployment Notes
+
+- The existing listener rules using `alliance-textpresso-secret` header checks must be removed manually (via `delete-old-rules.sh`) before deploying this stack, as they occupy the same priorities (96-100).
+- The ALB default action (403 response) is unchanged and remains as a catch-all for unmatched requests.
+- The User Pool has a RETAIN removal policy to protect user data if the stack is destroyed.
+- `listener-rules-backup.json` is critical for rollback — do not delete it until the new setup is verified.
