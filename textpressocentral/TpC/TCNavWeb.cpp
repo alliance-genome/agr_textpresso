@@ -199,6 +199,13 @@ session_("user=www-data dbname=www-data"), urlparameters_(urlparameters) {
     //
     Wt::WVBoxLayout * layout = new Wt::WVBoxLayout();
     setLayout(layout);
+    Wt::WAnchor *warning = new Wt::WAnchor(Wt::WLink(Wt::WLink::Url, "http://textmining.textpresso.org/new-login-system"));
+    Wt::WText *warningText = new Wt::WText("Textpresso will implement a new login system on May 1st, 2026! Please click here for important information!", warning);
+    warningText->decorationStyle().setForegroundColor(Wt::red);
+    warningText->decorationStyle().font().setWeight(Wt::WFont::Bold);
+    warningText->decorationStyle().font().setSize(Wt::WFont::Large);
+    layout->addWidget(warning);
+
     AuthEvent();
     if (urlparameters_->IsRoot()) {
 
