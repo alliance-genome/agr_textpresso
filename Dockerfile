@@ -43,7 +43,12 @@ RUN mkdir -p etc
 COPY stopwords.postgres.tar.gz /usr/local/textpresso/etc/.
 WORKDIR /
 
-RUN wget -q https://repo.anaconda.com/miniconda/Miniconda3-py311_25.5.1-0-Linux-x86_64.sh && bash Miniconda3-py311_25.5.1-0-Linux-x86_64.sh -b && rm Miniconda3-py311_25.5.1-0-Linux-x86_64.sh
+RUN ARCH="$(dpkg --print-architecture)" \
+ && if [ "$ARCH" = "arm64" ]; then MC_ARCH="aarch64"; else MC_ARCH="x86_64"; fi \
+ && MC_SH="Miniconda3-py311_25.5.1-0-Linux-${MC_ARCH}.sh" \
+ && wget -q "https://repo.anaconda.com/miniconda/${MC_SH}" \
+ && bash "${MC_SH}" -b \
+ && rm "${MC_SH}"
 ENV PATH="${PATH}:/root/miniconda3/bin"
 RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
 RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r

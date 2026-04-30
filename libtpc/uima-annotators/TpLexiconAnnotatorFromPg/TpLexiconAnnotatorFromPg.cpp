@@ -13,7 +13,7 @@
 #include <pqxx/pqxx>
 #include <boost/algorithm/string.hpp>
 
-TpLexiconAnnotatorFromPg::TpLexiconAnnotatorFromPg(void) {
+TpLexiconAnnotatorFromPg::TpLexiconAnnotatorFromPg(void) : tcas_(nullptr), trie_(nullptr), s_(nullptr) {
 }
 
 TpLexiconAnnotatorFromPg::~TpLexiconAnnotatorFromPg(void) {
@@ -111,6 +111,10 @@ uima::TyErrorId TpLexiconAnnotatorFromPg::typeSystemInit(uima::TypeSystem const 
 }
 
 uima::TyErrorId TpLexiconAnnotatorFromPg::destroy() {
+    delete trie_;
+    trie_ = nullptr;
+    delete s_;
+    s_ = nullptr;
     return (uima::TyErrorId) UIMA_ERR_NONE;
 }
 

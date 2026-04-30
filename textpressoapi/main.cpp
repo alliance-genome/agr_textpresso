@@ -5,6 +5,7 @@
 #include <textpresso/IndexManager.h>
 #include <SQLiteCpp/SQLiteCpp.h>
 #include <boost/program_options.hpp>
+#include <fstream>
 
 using namespace tpc::index;
 using namespace std;
@@ -12,6 +13,76 @@ using namespace SQLite;
 using namespace boost::filesystem;
 
 namespace po = boost::program_options;
+
+namespace {
+
+struct BibMetadata {
+    string accession;
+    string title;
+    string author;
+    string journal;
+    string year;
+    string type;
+    string abstract_text;
+};
+
+string unwrap_marked_field(const string& value) {
+    static const string prefix = "BEGIN ";
+    static const string suffix = " END";
+    if (value.size() >= prefix.size() + suffix.size() &&
+            value.compare(0, prefix.size(), prefix) == 0 &&
+            value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        return value.substr(prefix.size(), value.size() - prefix.size() - suffix.size());
+    }
+    return value;
+}
+
+string basename_without_suffix(const string& filepath, const string& suffix) {
+    auto slash = filepath.find_last_of('/');
+    string basename = slash == string::npos ? filepath : filepath.substr(slash + 1);
+    if (basename.size() >= suffix.size() &&
+            basename.compare(basename.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        basename.resize(basename.size() - suffix.size());
+    }
+    return basename;
+}
+
+BibMetadata load_bib_metadata(const string& filepath) {
+    BibMetadata metadata;
+    path bib_path = path(CAS_ROOT_LOCATION) / path(filepath);
+    bib_path.replace_extension(".bib");
+    std::ifstream input(bib_path.string());
+    if (!input.good()) {
+        return metadata;
+    }
+    string line;
+    while (getline(input, line)) {
+        auto split = line.find('|');
+        if (split == string::npos) {
+            continue;
+        }
+        string key = line.substr(0, split);
+        string value = line.substr(split + 1);
+        if (key == "accession") {
+            metadata.accession = value;
+        } else if (key == "title") {
+            metadata.title = value;
+        } else if (key == "author") {
+            metadata.author = value;
+        } else if (key == "journal") {
+            metadata.journal = value;
+        } else if (key == "year") {
+            metadata.year = value;
+        } else if (key == "type") {
+            metadata.type = value;
+        } else if (key == "abstract") {
+            metadata.abstract_text = value;
+        }
+    }
+    return metadata;
+}
+
+}
 
 bool is_token_valid(const string& db_path, const string& token) {
     try {
@@ -225,25 +296,56 @@ int main(int argc, const char* argv[]) {
                 }
                 auto doc_details = indexManager.get_documents_details(
                         vector<tpc::index::DocumentSummary>(first_iter, last_iter), query.sort_by_year,
-                        include_match_sentences, tpc::index::DOCUMENTS_FIELDS_DETAILED, include_match_sentence_fields,
+                        include_match_sentences, {"filepath", "year", "doc_id"}, include_match_sentence_fields,
                         exclude_doc_fields,{}, include_all_sentences, include_all_sentence_fields,{}, true, true);
                 // response
                 crow::json::wvalue json_resp;
                 for (int i = 0; i < doc_details.size(); ++i) {
+                    BibMetadata bib = load_bib_metadata(doc_details[i].filepath);
+                    string accession = doc_details[i].accession.empty() ?
+                            basename_without_suffix(doc_details[i].filepath, ".tpcas") :
+                            doc_details[i].accession;
+                    if (!bib.accession.empty()) {
+                        accession = bib.accession;
+                    }
+                    string title = unwrap_marked_field(doc_details[i].title);
+                    if (title.empty() && !bib.title.empty()) {
+                        title = bib.title;
+                    }
+                    if (title.empty()) {
+                        title = accession;
+                    }
+                    string author = unwrap_marked_field(doc_details[i].author);
+                    if (author.empty() && bib.author != "<not uploaded>") {
+                        author = bib.author;
+                    }
+                    string journal = unwrap_marked_field(doc_details[i].journal);
+                    if (journal.empty() && bib.journal != "<not uploaded>") {
+                        journal = bib.journal;
+                    }
+                    string doc_type = doc_details[i].type;
+                    if (doc_type.empty() && !bib.type.empty() && bib.type != "<not uploaded>") {
+                        doc_type = bib.type;
+                    }
+                    string year = doc_details[i].year;
+                    if (year.empty() && !bib.year.empty() && bib.year != "<not uploaded>") {
+                        year = bib.year;
+                    }
                     json_resp[i]["identifier"] = doc_details[i].filepath;
-                            json_resp[i]["score"] = doc_details[i].score;
-                            json_resp[i]["title"] =
-                            doc_details[i].title.substr(6, doc_details[i].title.length() - 10);
-                            json_resp[i]["author"] =
-                            doc_details[i].author.substr(6, doc_details[i].author.length() - 10);
-                            json_resp[i]["accession"] = doc_details[i].accession;
-                            json_resp[i]["journal"] =
-                            doc_details[i].journal.substr(6, doc_details[i].journal.length() - 10);
-                            json_resp[i]["doc_type"] = doc_details[i].type;
-                            json_resp[i]["year"] = doc_details[i].year;
+                    json_resp[i]["score"] = doc_details[i].score;
+                    json_resp[i]["title"] = title;
+                    json_resp[i]["author"] = author;
+                    json_resp[i]["accession"] = accession;
+                    json_resp[i]["journal"] = journal;
+                    json_resp[i]["doc_type"] = doc_type;
+                    json_resp[i]["year"] = year;
                     if (include_text) {
                         json_resp[i]["fulltext"] = doc_details[i].fulltext;
-                                json_resp[i]["abstract"] = doc_details[i].abstract;
+                        json_resp[i]["abstract"] = doc_details[i].abstract;
+                        if (doc_details[i].abstract.empty() && !bib.abstract_text.empty() &&
+                                bib.abstract_text != "<not uploaded>") {
+                            json_resp[i]["abstract"] = bib.abstract_text;
+                        }
                     }
                     if (include_match_sentences) {
                         sort(doc_details[i].sentences_details.begin(),

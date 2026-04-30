@@ -207,8 +207,12 @@ std::string utf8Printable(const string & string) {
 }
 
 TdTokenizer::TdTokenizer() {
-    dlsetToken_ = set<UnicodeString > (G_initT, G_initT + G_initT_No);
-    dlsetSentence_ = set<UnicodeString > (G_initS, G_initS + G_initS_No);
+    dlsetToken_ = set<UnicodeString >(
+            tp_uima_globals::token_delimiters(),
+            tp_uima_globals::token_delimiters() + G_initT_No);
+    dlsetSentence_ = set<UnicodeString >(
+            tp_uima_globals::sentence_delimiters(),
+            tp_uima_globals::sentence_delimiters() + G_initS_No);
     disqSentence_.push_back("[\\(>\\s][A-Z]\\.[<\\s]$");
     const string part1 = "[\\(>\\s](Prof|Ph\\.D|Dr|[Ff]igs?|[Vv]ol|i\\.e|e\\.g";
     const string part2 = "|[Nn]o|[Vv]s|[Ee]x|al|ca)\\.[<\\s]$";
@@ -216,19 +220,18 @@ TdTokenizer::TdTokenizer() {
     maxfrontdisqcharlength_ = 4; // sniplet length in front of sentence delimiter
     maxbackdisqcharlength_ = 0; // sniplet length  following sentence delimiter.
     dlsetSection_.clear();
-    for (auto x : sectionArticleB) dlsetSection_.insert(x);
-    for (auto x : sectionArticleE) dlsetSection_.insert(x);
-    for (auto x : sectionAbstract) dlsetSection_.insert(x);
-    for (auto x : sectionIntroduction) dlsetSection_.insert(x);
-    for (auto x : sectionResult) dlsetSection_.insert(x);
-    for (auto x : sectionDiscussion) dlsetSection_.insert(x);
-    for (auto x : sectionConclusion) dlsetSection_.insert(x);
-    for (auto x : sectionBackground) dlsetSection_.insert(x);
-    for (auto x : sectionMaterialsMethods) dlsetSection_.insert(x);
-    for (auto x : sectionDesign) dlsetSection_.insert(x);
-    for (auto x : sectionAcknowledgments) dlsetSection_.insert(x);
-
-    for (auto x : sectionReferences) dlsetSection_.insert(x);
+    for (auto x : tp_uima_globals::sectionArticleB()) dlsetSection_.insert(x);
+    for (auto x : tp_uima_globals::sectionArticleE()) dlsetSection_.insert(x);
+    for (auto x : tp_uima_globals::sectionAbstract()) dlsetSection_.insert(x);
+    for (auto x : tp_uima_globals::sectionIntroduction()) dlsetSection_.insert(x);
+    for (auto x : tp_uima_globals::sectionResult()) dlsetSection_.insert(x);
+    for (auto x : tp_uima_globals::sectionDiscussion()) dlsetSection_.insert(x);
+    for (auto x : tp_uima_globals::sectionConclusion()) dlsetSection_.insert(x);
+    for (auto x : tp_uima_globals::sectionBackground()) dlsetSection_.insert(x);
+    for (auto x : tp_uima_globals::sectionMaterialsMethods()) dlsetSection_.insert(x);
+    for (auto x : tp_uima_globals::sectionDesign()) dlsetSection_.insert(x);
+    for (auto x : tp_uima_globals::sectionAcknowledgments()) dlsetSection_.insert(x);
+    for (auto x : tp_uima_globals::sectionReferences()) dlsetSection_.insert(x);
 }
 
 TdTokenizer::TdTokenizer(const TdTokenizer & orig) {
@@ -428,14 +431,14 @@ TyErrorId TdTokenizer::process(CAS & tcas, ResultSpecification const & crResultS
         aait.moveToNext();
     }
 
-    bool hasResult(hasSection(sectionResult, sections));
-    bool hasIntroduction(hasSection(sectionIntroduction, sections));
-    bool hasBackground(hasSection(sectionBackground, sections));
-    bool hasDiscussion(hasSection(sectionDiscussion, sections));
-    bool hasConclusion(hasSection(sectionConclusion, sections));
-    bool hasMM(hasSection(sectionMaterialsMethods, sections));
-    bool hasDesign(hasSection(sectionDesign, sections));
-    bool hasReferences(hasSection(sectionReferences, sections));
+    bool hasResult(hasSection(tp_uima_globals::sectionResult(), sections));
+    bool hasIntroduction(hasSection(tp_uima_globals::sectionIntroduction(), sections));
+    bool hasBackground(hasSection(tp_uima_globals::sectionBackground(), sections));
+    bool hasDiscussion(hasSection(tp_uima_globals::sectionDiscussion(), sections));
+    bool hasConclusion(hasSection(tp_uima_globals::sectionConclusion(), sections));
+    bool hasMM(hasSection(tp_uima_globals::sectionMaterialsMethods(), sections));
+    bool hasDesign(hasSection(tp_uima_globals::sectionDesign(), sections));
+    bool hasReferences(hasSection(tp_uima_globals::sectionReferences(), sections));
     int score(0);
     if (hasIntroduction || hasBackground) score++;
     if (hasDiscussion || hasConclusion) score++;
@@ -443,29 +446,29 @@ TyErrorId TdTokenizer::process(CAS & tcas, ResultSpecification const & crResultS
     if (hasMM || hasDesign) score++;
     if (hasReferences) score++;
     if (score > 3) {
-        combineSectionAnnotations(tcas, sectionArticleB, sections,
+        combineSectionAnnotations(tcas, tp_uima_globals::sectionArticleB(), sections,
                 sectionsB, sectionsE, "beginning of article", ac);
-        combineSectionAnnotations(tcas, sectionArticleE, sections,
+        combineSectionAnnotations(tcas, tp_uima_globals::sectionArticleE(), sections,
                 sectionsB, sectionsE, "end of article", ac);
-        combineSectionAnnotations(tcas, sectionAbstract, sections,
+        combineSectionAnnotations(tcas, tp_uima_globals::sectionAbstract(), sections,
                 sectionsB, sectionsE, "abstract", ac);
-        combineSectionAnnotations(tcas, sectionIntroduction, sections,
+        combineSectionAnnotations(tcas, tp_uima_globals::sectionIntroduction(), sections,
                 sectionsB, sectionsE, "introduction", ac);
-        combineSectionAnnotations(tcas, sectionResult, sections,
+        combineSectionAnnotations(tcas, tp_uima_globals::sectionResult(), sections,
                 sectionsB, sectionsE, "result", ac);
-        combineSectionAnnotations(tcas, sectionDiscussion, sections,
+        combineSectionAnnotations(tcas, tp_uima_globals::sectionDiscussion(), sections,
                 sectionsB, sectionsE, "discussion", ac);
-        combineSectionAnnotations(tcas, sectionConclusion, sections,
+        combineSectionAnnotations(tcas, tp_uima_globals::sectionConclusion(), sections,
                 sectionsB, sectionsE, "conclusion", ac);
-        combineSectionAnnotations(tcas, sectionBackground, sections,
+        combineSectionAnnotations(tcas, tp_uima_globals::sectionBackground(), sections,
                 sectionsB, sectionsE, "background", ac);
-        combineSectionAnnotations(tcas, sectionMaterialsMethods, sections,
+        combineSectionAnnotations(tcas, tp_uima_globals::sectionMaterialsMethods(), sections,
                 sectionsB, sectionsE, "materials and methods", ac);
-        combineSectionAnnotations(tcas, sectionDesign, sections,
+        combineSectionAnnotations(tcas, tp_uima_globals::sectionDesign(), sections,
                 sectionsB, sectionsE, "design", ac);
-        combineSectionAnnotations(tcas, sectionAcknowledgments, sections,
+        combineSectionAnnotations(tcas, tp_uima_globals::sectionAcknowledgments(), sections,
                 sectionsB, sectionsE, "acknowledgments", ac);
-        combineSectionAnnotations(tcas, sectionReferences, sections,
+        combineSectionAnnotations(tcas, tp_uima_globals::sectionReferences(), sections,
                 sectionsB, sectionsE, "references", ac);
     }
     FSIndexRepository & indexRep = tcas.getIndexRepository();

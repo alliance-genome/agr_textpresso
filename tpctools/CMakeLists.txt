@@ -45,14 +45,15 @@ add_executable(ppm2jpg ppm2jpg/main.cpp)
 target_link_libraries(ppm2jpg boost_system boost_filesystem boost_program_options pthread ${CImg_SYSTEM_LIBS})
 
 add_executable(cas2index cas2index/cas2index.cpp)
-target_link_libraries(cas2index ${Textpresso_LIBRARY} boost_filesystem boost_system boost_program_options lucene++)
+target_link_libraries(cas2index ${Textpresso_LIBRARY} boost_filesystem boost_system boost_program_options lucene++
+        pthread)
 
 add_executable(updatecorpuscounter cas2index/update_corpus_counter.cpp)
 target_link_libraries(updatecorpuscounter ${Textpresso_LIBRARY} boost_filesystem boost_system boost_program_options
-        lucene++)
+        lucene++ pthread)
 
 add_executable(indexmerger cas2index/index_merger.cpp lucene/CaseSensitiveAnalyzer.cpp)
-target_link_libraries(indexmerger uima boost_filesystem boost_system lucene++)
+target_link_libraries(indexmerger uima boost_filesystem boost_system lucene++ pthread)
 
 add_executable(articles2cas articles2cas/articles2cas.cpp articles2cas/Utils.h articles2cas/Utils.cpp)
 target_link_libraries(articles2cas ${Textpresso_LIBRARY} boost_filesystem boost_system boost_program_options boost_iostreams)
@@ -63,22 +64,23 @@ target_link_libraries(downloadpdf xerces-c boost_program_options boost_filesyste
 add_executable(getbib getbib/getbib.cpp getbib/getbibUtils.h getbib/getbibUtils.cpp
         TextpressoCentralGlobalDefinitions.h TextpressoCentralGlobals.h)
 target_link_libraries(getbib lucene++ xerces-c icuuc boost_system uima boost_filesystem boost_iostreams)
+target_link_libraries(getbib pthread)
 
 add_executable(getbib4nxml getbib/getbib4nxml.cpp getbib/getbib4nxmlUtils.h getbib/getbib4nxmlUtils.cpp
         TextpressoCentralGlobalDefinitions.h TextpressoCentralGlobals.h)
 target_link_libraries(getbib4nxml lucene++ xerces-c icuuc boost_system uima boost_filesystem boost_iostreams
-        boost_program_options)
+        boost_program_options pthread)
 
 add_executable(saveidstodb cas2index/saveidstodb.cpp)
 target_link_libraries(saveidstodb lucene++ boost_filesystem boost_system boost_program_options ${Textpresso_LIBRARY}
-        db_cxx db_stl)
+        db_cxx db_stl pthread)
 
 add_executable(cmykinverter CMYKInverter/CMYKModifier.h CMYKInverter/CMYKModifier.cpp CMYKInverter/main.cpp)
 target_link_libraries(cmykinverter ${ImageMagick_LIBRARIES} boost_system boost_filesystem)
 
 add_executable(curationtasks curationtasks/main.cpp)
 target_link_libraries(curationtasks lucene++ boost_filesystem boost_system boost_regex boost_program_options
-        ${Textpresso_LIBRARY})
+        ${Textpresso_LIBRARY} pthread)
 
 add_executable(diffhtml diffhtml/main.cpp diffhtml/cmdline.h)
 

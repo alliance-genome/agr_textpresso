@@ -27,6 +27,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <fstream>
 
 #include <lucene++/LuceneHeaders.h>
 #include <lucene++/CompressionTools.h>
@@ -43,6 +44,16 @@ using namespace std;
 using namespace tpc::index;
 
 namespace {
+
+    struct BibMetadata {
+        std::string accession;
+        std::string title;
+        std::string author;
+        std::string journal;
+        std::string year;
+        std::string type;
+        std::string abstract_text;
+    };
 
     bool is_number(const std::wstring& s) {
         std::wstring::const_iterator it = s.begin();
@@ -71,6 +82,61 @@ namespace {
 
     Wt::WString LString2WtString(const Lucene::String& lstring) {
         return Wt::WString(lstring.c_str());
+    }
+
+    std::string unwrap_marked_field(const std::string& value) {
+        if (value.size() >= 10 && value.rfind("[[VAL[", 0) == 0 &&
+                value.compare(value.size() - 4, 4, "]]]") == 0) {
+            return value.substr(6, value.size() - 10);
+        }
+        return value;
+    }
+
+    std::string basename_without_suffix(const std::string& path, const std::string& suffix) {
+        boost::filesystem::path filepath(path);
+        std::string base = filepath.filename().string();
+        if (base.size() >= suffix.size() &&
+                base.compare(base.size() - suffix.size(), suffix.size(), suffix) == 0) {
+            base.erase(base.size() - suffix.size());
+        }
+        return base;
+    }
+
+    BibMetadata load_bib_metadata(const std::string& filepath) {
+        BibMetadata metadata;
+        boost::filesystem::path bib_path = boost::filesystem::path(CAS_ROOT_LOCATION) /
+                boost::filesystem::path(filepath);
+        bib_path.replace_extension(".bib");
+        if (!boost::filesystem::exists(bib_path)) {
+            return metadata;
+        }
+
+        std::ifstream input(bib_path.string());
+        std::string line;
+        while (std::getline(input, line)) {
+            auto split = line.find('|');
+            if (split == std::string::npos) {
+                continue;
+            }
+            std::string key = line.substr(0, split);
+            std::string value = line.substr(split + 1);
+            if (key == "accession") {
+                metadata.accession = value;
+            } else if (key == "title") {
+                metadata.title = value;
+            } else if (key == "author") {
+                metadata.author = value;
+            } else if (key == "journal") {
+                metadata.journal = value;
+            } else if (key == "year") {
+                metadata.year = value;
+            } else if (key == "type") {
+                metadata.type = value;
+            } else if (key == "abstract") {
+                metadata.abstract_text = value;
+            }
+        }
+        return metadata;
     }
 
     vector<pair<int, int> > searchregex(string regex, string text) {
@@ -1523,7 +1589,7 @@ void Search::getAllResults(std::vector< std::vector < std::wstring> >& contents)
         //
         vector<DocumentDetails> docsDetails = indexManager_.get_documents_details(
                 searchResults_.hit_documents, cb_year_->isChecked(), false,
-                DOCUMENTS_FIELDS_DETAILED, SENTENCE_FIELDS_DETAILED, {
+                {"filepath", "year", "doc_id"}, SENTENCE_FIELDS_DETAILED, {
                     "fulltext_compressed", "fulltext_cat_compressed"
                 },
         {
@@ -1552,30 +1618,50 @@ void Search::getAllResults(std::vector< std::vector < std::wstring> >& contents)
             std::vector<std::wstring> row;
             std::wstring serial = boost::lexical_cast<std::wstring > (i + 1);
             row.push_back(serial);
-            row.push_back(LString2WtString(String(docDetails.accession.begin(), docDetails.accession.end())));
+            BibMetadata bib = load_bib_metadata(docDetails.filepath);
+            string accession = docDetails.accession.empty() ?
+                    basename_without_suffix(docDetails.filepath, ".tpcas") :
+                    docDetails.accession;
+            if (!bib.accession.empty()) {
+                accession = bib.accession;
+            }
+            row.push_back(LString2WtString(String(accession.begin(), accession.end())));
             string corpora = boost::join(docDetails.corpora, ", ");
             row.push_back(LString2WtString(String(corpora.begin(), corpora.end())));
-            row.push_back(LString2WtString(String(docDetails.type.begin(), docDetails.type.end())));
-            if (!docDetails.title.empty()) {
-                string cleanTitle = docDetails.title.substr(6, docDetails.title.size() - 10);
-                row.push_back(LString2WtString(String(cleanTitle.begin(), cleanTitle.end())));
-            } else {
-                row.push_back(L"");
+            string doc_type = docDetails.type;
+            if (doc_type.empty() && !bib.type.empty() && bib.type != "<not uploaded>") {
+                doc_type = bib.type;
             }
-            if (!docDetails.author.empty()) {
-                string cleanAuthor = docDetails.author.substr(6, docDetails.author.size() - 10);
-                row.push_back(LString2WtString(String(cleanAuthor.begin(), cleanAuthor.end())));
-            } else {
-                row.push_back(L"");
+            row.push_back(LString2WtString(String(doc_type.begin(), doc_type.end())));
+            string title = unwrap_marked_field(docDetails.title);
+            if (title.empty() && !bib.title.empty()) {
+                title = bib.title;
             }
-            if (!docDetails.journal.empty()) {
-                string cleanJournal = docDetails.journal.substr(6, docDetails.journal.size() - 10);
-                row.push_back(LString2WtString(String(cleanJournal.begin(), cleanJournal.end())));
-            } else {
-                row.push_back(L"");
+            if (title.empty()) {
+                title = accession;
             }
-            row.push_back(LString2WtString(String(docDetails.year.begin(), docDetails.year.end())));
-            row.push_back(LString2WtString(String(docDetails.abstract.begin(), docDetails.abstract.end())));
+            row.push_back(LString2WtString(String(title.begin(), title.end())));
+            string author = unwrap_marked_field(docDetails.author);
+            if (author.empty() && bib.author != "<not uploaded>") {
+                author = bib.author;
+            }
+            row.push_back(LString2WtString(String(author.begin(), author.end())));
+            string journal = unwrap_marked_field(docDetails.journal);
+            if (journal.empty() && bib.journal != "<not uploaded>") {
+                journal = bib.journal;
+            }
+            row.push_back(LString2WtString(String(journal.begin(), journal.end())));
+            string year = docDetails.year;
+            if (year.empty() && !bib.year.empty() && bib.year != "<not uploaded>") {
+                year = bib.year;
+            }
+            row.push_back(LString2WtString(String(year.begin(), year.end())));
+            string abstract_text = docDetails.abstract;
+            if (abstract_text.empty() && !bib.abstract_text.empty() &&
+                    bib.abstract_text != "<not uploaded>") {
+                abstract_text = bib.abstract_text;
+            }
+            row.push_back(LString2WtString(String(abstract_text.begin(), abstract_text.end())));
             row.push_back(w_score);
             string filepath = docDetails.filepath;
             boost::replace_regex(filepath, boost::regex("^PMCOA [^\\/]*\\/"), string("PMCOA\\/"));
@@ -1660,7 +1746,7 @@ void Search::displayTable(int start, int end, int direction) {
     set<string> fields_to_exclude;
     vector<DocumentDetails> docsDetails = indexManager_.get_documents_details(
             doc_summaries, cb_year_->isChecked(), false,
-            DOCUMENTS_FIELDS_DETAILED, SENTENCE_FIELDS_DETAILED, {
+            {"filepath", "year", "doc_id"}, SENTENCE_FIELDS_DETAILED, {
                 "fulltext_compressed", "fulltext_cat_compressed"
             },
     {
@@ -1695,30 +1781,50 @@ void Search::displayTable(int start, int end, int direction) {
         std::vector<std::wstring> row;
         std::wstring serial = boost::lexical_cast<std::wstring > (i + 1);
         row.push_back(serial);
-        row.push_back(LString2WtString(String(docDetails.accession.begin(), docDetails.accession.end())));
+        BibMetadata bib = load_bib_metadata(docDetails.filepath);
+        string accession = docDetails.accession.empty() ?
+                basename_without_suffix(docDetails.filepath, ".tpcas") :
+                docDetails.accession;
+        if (!bib.accession.empty()) {
+            accession = bib.accession;
+        }
+        row.push_back(LString2WtString(String(accession.begin(), accession.end())));
         string corpora = boost::join(docDetails.corpora, ", ");
         row.push_back(LString2WtString(String(corpora.begin(), corpora.end())));
-        row.push_back(LString2WtString(String(docDetails.type.begin(), docDetails.type.end())));
-        if (!docDetails.title.empty()) {
-            string cleanTitle = docDetails.title.substr(6, docDetails.title.size() - 10);
-            row.push_back(LString2WtString(String(cleanTitle.begin(), cleanTitle.end())));
-        } else {
-            row.push_back(L"");
+        string doc_type = docDetails.type;
+        if (doc_type.empty() && !bib.type.empty() && bib.type != "<not uploaded>") {
+            doc_type = bib.type;
         }
-        if (!docDetails.author.empty()) {
-            string cleanAuthor = docDetails.author.substr(6, docDetails.author.size() - 10);
-            row.push_back(LString2WtString(String(cleanAuthor.begin(), cleanAuthor.end())));
-        } else {
-            row.push_back(L"");
+        row.push_back(LString2WtString(String(doc_type.begin(), doc_type.end())));
+        string title = unwrap_marked_field(docDetails.title);
+        if (title.empty() && !bib.title.empty()) {
+            title = bib.title;
         }
-        if (!docDetails.journal.empty()) {
-            string cleanJournal = docDetails.journal.substr(6, docDetails.journal.size() - 10);
-            row.push_back(LString2WtString(String(cleanJournal.begin(), cleanJournal.end())));
-        } else {
-            row.push_back(L"");
+        if (title.empty()) {
+            title = accession;
         }
-        row.push_back(LString2WtString(String(docDetails.year.begin(), docDetails.year.end())));
-        row.push_back(LString2WtString(String(docDetails.abstract.begin(), docDetails.abstract.end())));
+        row.push_back(LString2WtString(String(title.begin(), title.end())));
+        string author = unwrap_marked_field(docDetails.author);
+        if (author.empty() && bib.author != "<not uploaded>") {
+            author = bib.author;
+        }
+        row.push_back(LString2WtString(String(author.begin(), author.end())));
+        string journal = unwrap_marked_field(docDetails.journal);
+        if (journal.empty() && bib.journal != "<not uploaded>") {
+            journal = bib.journal;
+        }
+        row.push_back(LString2WtString(String(journal.begin(), journal.end())));
+        string year = docDetails.year;
+        if (year.empty() && !bib.year.empty() && bib.year != "<not uploaded>") {
+            year = bib.year;
+        }
+        row.push_back(LString2WtString(String(year.begin(), year.end())));
+        string abstract_text = docDetails.abstract;
+        if (abstract_text.empty() && !bib.abstract_text.empty() &&
+                bib.abstract_text != "<not uploaded>") {
+            abstract_text = bib.abstract_text;
+        }
+        row.push_back(LString2WtString(String(abstract_text.begin(), abstract_text.end())));
         row.push_back(w_score);
         string filepath = docDetails.filepath;
         boost::replace_regex(filepath, boost::regex("^PMCOA [^\\/]*\\/"), string("PMCOA\\/"));
