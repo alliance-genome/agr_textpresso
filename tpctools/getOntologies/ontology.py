@@ -8,6 +8,18 @@ biological ontologies (GO, DOID, ChEBI, SO, etc.) for text mining purposes.
 import urllib.request
 from typing import Optional
 
+# current.geneontology.org (and at times purl.obolibrary.org) sit behind bot
+# protection that returns HTTP 403 for the default "Python-urllib/x.y"
+# User-Agent. Install a global opener presenting a browser-like User-Agent so
+# every urlretrieve below (and any redirects it follows) is accepted.
+_opener = urllib.request.build_opener()
+_opener.addheaders = [(
+    'User-Agent',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
+    '(KHTML, like Gecko) Chrome/124.0 Safari/537.36'
+)]
+urllib.request.install_opener(_opener)
+
 
 def download_all_ontologies(mod: str, id_prefix: str) -> None:
     """Download and process all relevant ontologies for a given MOD."""
