@@ -26,6 +26,14 @@ RUN git clone https://github.com/ipkn/crow.git
 RUN git clone https://github.com/SRombauts/SQLiteCpp.git; cd SQLiteCpp; git checkout 3.3.1; mkdir cmake-build-release; cd cmake-build-release; cmake ..; make -j 8; make install; rm -rf /SQLiteCpp
 
 # Precompile system
+COPY libtpc /data/textpresso/libtpc
+RUN cd /data/textpresso/libtpc && \
+    mkdir -p build && cd build && \
+    cmake -DCMAKE_BUILD_TYPE=Release .. && \
+    make -j 8 && make install && \
+    ldconfig && \
+    rm -rf /data/textpresso/libtpc
+
 COPY textpressocentral /data/textpresso/textpressocentral
 COPY textpressoapi /data/textpresso/textpressoapi
 COPY tpctools /data/textpresso/tpctools

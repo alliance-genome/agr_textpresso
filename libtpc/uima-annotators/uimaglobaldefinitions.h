@@ -50,14 +50,20 @@ inline const std::set<UnicodeString>& sectionArticleE() {
 
 inline const std::set<UnicodeString>& sectionAbstract() {
     static const auto* values = new std::set<UnicodeString>{
-        "Abstract\n", "A b s t r a c t\n", "ABSTRACT\n", "A B S T R A C T\n"
+        "Abstract\n", "A b s t r a c t\n", "ABSTRACT\n", "A B S T R A C T\n",
+        "Summary\n", "S u m m a r y\n", "SUMMARY\n", "S U M M A R Y\n"
     };
     return *values;
 }
 
 inline const std::set<UnicodeString>& sectionIntroduction() {
     static const auto* values = new std::set<UnicodeString>{
-        "Introduction\n", "I n t r o d u c t i o n\n", "INTRODUCTION\n", "I N T R O D U C T I O N\n"
+        "Introduction\n", "I n t r o d u c t i o n\n", "INTRODUCTION\n", "I N T R O D U C T I O N\n",
+        "Literature Review\n", "L i t e r a t u r e   R e v i e w\n",
+        "LITERATURE REVIEW\n", "L I T E R A T U R E   R E V I E W\n",
+        // sentence case / all-lowercase -- some journals don't title-case every
+        // word of a multi-word heading (see uimaglobaldefinitions.h header note)
+        "literature review\n", "Literature review\n"
     };
     return *values;
 }
@@ -65,14 +71,32 @@ inline const std::set<UnicodeString>& sectionIntroduction() {
 inline const std::set<UnicodeString>& sectionResult() {
     static const auto* values = new std::set<UnicodeString>{
         "Result\n", "R e s u l t\n", "RESULT\n", "R E S U L T\n",
-        "Results\n", "R e s u l t s\n", "RESULTS\n", "R E S U L T S\n"
+        "Results\n", "R e s u l t s\n", "RESULTS\n", "R E S U L T S\n",
+        // combined header: also tagged "discussion" (see sectionDiscussion()) --
+        // TdTokenizer::combineSectionAnnotations() creates one annotation per
+        // type independently, so membership in both sets makes this span
+        // findable under both --type result and --type discussion.
+        "Results and Discussion\n", "R e s u l t s   a n d   D i s c u s s i o n\n",
+        "RESULTS AND DISCUSSION\n", "R E S U L T S   A N D   D I S C U S S I O N\n",
+        "results and discussion\n", "Results and discussion\n"
     };
     return *values;
 }
 
 inline const std::set<UnicodeString>& sectionDiscussion() {
     static const auto* values = new std::set<UnicodeString>{
-        "Discussion\n", "D i s c u s s i o n\n", "DISCUSSION\n", "D I S C U S S I O N\n"
+        "Discussion\n", "D i s c u s s i o n\n", "DISCUSSION\n", "D I S C U S S I O N\n",
+        // combined header, also tagged "result" -- see sectionResult()
+        "Results and Discussion\n", "R e s u l t s   a n d   D i s c u s s i o n\n",
+        "RESULTS AND DISCUSSION\n", "R E S U L T S   A N D   D I S C U S S I O N\n",
+        "results and discussion\n", "Results and discussion\n",
+        // combined header, also tagged "conclusion" -- see sectionConclusion()
+        "Discussion and Conclusion\n", "D i s c u s s i o n   a n d   C o n c l u s i o n\n",
+        "DISCUSSION AND CONCLUSION\n", "D I S C U S S I O N   A N D   C O N C L U S I O N\n",
+        "discussion and conclusion\n", "Discussion and conclusion\n",
+        "Discussion and Conclusions\n", "D i s c u s s i o n   a n d   C o n c l u s i o n s\n",
+        "DISCUSSION AND CONCLUSIONS\n", "D I S C U S S I O N   A N D   C O N C L U S I O N S\n",
+        "discussion and conclusions\n", "Discussion and conclusions\n"
     };
     return *values;
 }
@@ -80,7 +104,17 @@ inline const std::set<UnicodeString>& sectionDiscussion() {
 inline const std::set<UnicodeString>& sectionConclusion() {
     static const auto* values = new std::set<UnicodeString>{
         "Conclusion\n", "C o n c l u s i o n\n", "CONCLUSION\n", "C O N C L U S I O N\n",
-        "Conclusions\n", "C o n c l u s i o n s\n", "CONCLUSIONS\n", "C O N C L U S I O N S\n"
+        "Conclusions\n", "C o n c l u s i o n s\n", "CONCLUSIONS\n", "C O N C L U S I O N S\n",
+        "Concluding Remarks\n", "C o n c l u d i n g   R e m a r k s\n",
+        "CONCLUDING REMARKS\n", "C O N C L U D I N G   R E M A R K S\n",
+        "concluding remarks\n", "Concluding remarks\n",
+        // combined header, also tagged "discussion" -- see sectionDiscussion()
+        "Discussion and Conclusion\n", "D i s c u s s i o n   a n d   C o n c l u s i o n\n",
+        "DISCUSSION AND CONCLUSION\n", "D I S C U S S I O N   A N D   C O N C L U S I O N\n",
+        "discussion and conclusion\n", "Discussion and conclusion\n",
+        "Discussion and Conclusions\n", "D i s c u s s i o n   a n d   C o n c l u s i o n s\n",
+        "DISCUSSION AND CONCLUSIONS\n", "D I S C U S S I O N   A N D   C O N C L U S I O N S\n",
+        "discussion and conclusions\n", "Discussion and conclusions\n"
     };
     return *values;
 }
@@ -113,7 +147,10 @@ inline const std::set<UnicodeString>& sectionMaterialsMethods() {
         "M a t e r i a l   a n d   m e t h o d\n", "Material and methods\n",
         "M a t e r i a l   a n d   m e t h o d s\n", "Materials and method\n",
         "M a t e r i a l s   a n d   m e t h o d\n", "Materials and methods\n",
-        "M a t e r i a l s   a n d   m e t h o d s\n"
+        "M a t e r i a l s   a n d   m e t h o d s\n",
+        "Experimental Procedures\n", "E x p e r i m e n t a l   P r o c e d u r e s\n",
+        "EXPERIMENTAL PROCEDURES\n", "E X P E R I M E N T A L   P R O C E D U R E S\n",
+        "experimental procedures\n", "Experimental procedures\n"
     };
     return *values;
 }
@@ -139,7 +176,16 @@ inline const std::set<UnicodeString>& sectionAcknowledgments() {
 inline const std::set<UnicodeString>& sectionReferences() {
     static const auto* values = new std::set<UnicodeString>{
         "Reference\n", "R e f e r e n c e\n", "REFERENCE\n", "R E F E R E N C E\n",
-        "References\n", "R e f e r e n c e s\n", "REFERENCES\n", "R E F E R E N C E S\n"
+        "References\n", "R e f e r e n c e s\n", "REFERENCES\n", "R E F E R E N C E S\n",
+        "Bibliography\n", "B i b l i o g r a p h y\n", "BIBLIOGRAPHY\n", "B I B L I O G R A P H Y\n",
+        "Literature Cited\n", "L i t e r a t u r e   C i t e d\n",
+        "LITERATURE CITED\n", "L I T E R A T U R E   C I T E D\n",
+        "literature cited\n", "Literature cited\n",
+        "References Cited\n", "R e f e r e n c e s   C i t e d\n",
+        "REFERENCES CITED\n", "R E F E R E N C E S   C I T E D\n",
+        "references cited\n", "References cited\n",
+        "Works Cited\n", "W o r k s   C i t e d\n", "WORKS CITED\n", "W O R K S   C I T E D\n",
+        "works cited\n", "Works cited\n"
     };
     return *values;
 }

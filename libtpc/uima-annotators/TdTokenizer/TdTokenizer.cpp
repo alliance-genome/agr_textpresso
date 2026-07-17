@@ -131,6 +131,66 @@ vector< pair<int32_t, int32_t> > RemoveDelimiters(const UnicodeStringRef usdocre
     return result;
 }
 
+// The raw document text carries inline PDF layout markers produced by text
+// extraction (e.g. "<_pdf _cr/>", "<_pdf _fsc=+11/>") interspersed directly
+// in the character stream. A section heading is typically followed by one
+// of these markers before the actual line break -- e.g. the literal text
+// "References <_pdf _cr/>\n" -- which never contains the exact substring
+// "References\n" that the section trie searches for, so headings never
+// match and no section boundaries are ever detected. This builds a copy of
+// the text with every "<_pdf ...>" marker removed, and any space left
+// dangling directly before a newline as a result (the marker is almost
+// always preceded by a word-separating space) collapsed away, while
+// recording, for each character kept, its offset in the original text so
+// match positions found in the cleaned copy can be translated back to the
+// original document for annotation creation.
+UnicodeString CleanPdfTagsForSectionSearch(const UnicodeString & src,
+        vector<int32_t> & posmap) {
+    static const UnicodeString tagPrefix("<_pdf ");
+    UnicodeString cleaned;
+    posmap.clear();
+    int32_t n = src.length();
+    bool pendingSpace = false;
+    int32_t pendingSpacePos = -1;
+    for (int32_t i = 0; i < n;) {
+        if (i + tagPrefix.length() <= n &&
+                src.compare(i, tagPrefix.length(), tagPrefix) == 0) {
+            int32_t j = i + tagPrefix.length();
+            while (j < n && src.charAt(j) != '>') j++;
+            if (j < n) j++; // consume the closing '>'
+            i = j;
+            continue;
+        }
+        UChar c = src.charAt(i);
+        if (c == ' ') {
+            if (pendingSpace) {
+                cleaned.append((UChar) ' ');
+                posmap.push_back(pendingSpacePos);
+            }
+            pendingSpace = true;
+            pendingSpacePos = i;
+        } else if (c == '\n') {
+            pendingSpace = false; // drop dangling space before the newline
+            cleaned.append(c);
+            posmap.push_back(i);
+        } else {
+            if (pendingSpace) {
+                cleaned.append((UChar) ' ');
+                posmap.push_back(pendingSpacePos);
+                pendingSpace = false;
+            }
+            cleaned.append(c);
+            posmap.push_back(i);
+        }
+        i++;
+    }
+    if (pendingSpace) {
+        cleaned.append((UChar) ' ');
+        posmap.push_back(pendingSpacePos);
+    }
+    return cleaned;
+}
+
 bool TdTokenizer::hasSection(const set<UnicodeString>& sectionNames,
         const vector<UnicodeString>& sections) {
     bool ret = false;
@@ -408,7 +468,13 @@ TyErrorId TdTokenizer::process(CAS & tcas, ResultSpecification const & crResultS
     WriteOutAnnotations(tcas, usdocref, p, sentencetype_, sentencetype_content_, ac, false);
     p.clear();
 
-    p = trieSection_->searchAllWords(dst);
+    vector<int32_t> sectionPosMap;
+    UnicodeString dstForSections = CleanPdfTagsForSectionSearch(dst, sectionPosMap);
+    p = trieSection_->searchAllWords(dstForSections);
+    for (auto & match : p) {
+        match.first = sectionPosMap[match.first];
+        match.second = sectionPosMap[match.second];
+    }
     sort(p.begin(), p.end()); // just to make sure it is sorted.
     WriteOutAnnotations(tcas, usdocref, p, rawsectiontype_, rawsectiontype_content_, ac, true);
     p.clear();

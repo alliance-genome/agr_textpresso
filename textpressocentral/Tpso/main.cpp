@@ -282,12 +282,17 @@ namespace {
                 synonymsraw((oentry == nullptr) ? std::vector<std::string>()
                 : oentry->GetData("synonym"));
         std::vector<std::string> synonyms;
-        for (auto s : synonymsraw)
-            if (s.find("EXACT") != std::string::npos) {
-                std::vector<std::string> sp2;
-                boost::split(sp2, s, boost::is_any_of("\""));
-                synonyms.push_back(sp2[1]);
+        std::vector<std::string> related_synonyms;
+        for (auto s : synonymsraw) {
+            std::vector<std::string> sp2;
+            boost::split(sp2, s, boost::is_any_of("\""));
+            if (sp2.size() > 1) {
+                if (s.find("EXACT") != std::string::npos)
+                    synonyms.push_back(sp2[1]);
+                else if (s.find("RELATED") != std::string::npos)
+                    related_synonyms.push_back(sp2[1]);
             }
+        }
         while (!synonyms.empty()) {
             std::string synterm = synonyms.back();
             synonyms.pop_back();
@@ -303,6 +308,46 @@ namespace {
                     d.push_back(synterm);
                     // category
                     d.push_back(category);
+                    // attributes
+                    d.push_back(attributes);
+                    // annotationtype
+                    d.push_back(annotationtype);
+                    // lexical variations
+                    d.push_back(lexicalvariations);
+                    // curation status
+                    d.push_back(curationstatus);
+                    // curation use
+                    d.push_back(curationuse);
+                    // comments
+                    d.push_back(ConcatenateStrings(namespaces, ", "));
+                    // owner
+                    d.push_back(owner);
+                    // source
+                    d.push_back(source);
+                    // version
+                    d.push_back(version);
+                    std::stringstream ss;
+                    ss << time(0);
+                    d.push_back(ss.str());
+                    ret.push_back(d);
+                }
+        }
+        std::string related_category = std::string("RELATED:") + category;
+        while (!related_synonyms.empty()) {
+            std::string synterm = related_synonyms.back();
+            related_synonyms.pop_back();
+            if (synterm.length() >= MINTERMLENGTH) // only store terms with length of two or longer
+                if (CountWords(synterm) <= MAXWORDCOUNT) { // only store terms with less than 5 words
+                    std::vector<std::string> d;
+                    d.clear();
+                    // id
+                    d.push_back(id);
+                    // allxrefs
+                    d.push_back(ConcatenateStrings(xrefs, ", "));
+                    // term
+                    d.push_back(synterm);
+                    // category (prefixed to distinguish from EXACT matches)
+                    d.push_back(related_category.substr(0, CATEGORYCOLUMNWIDTH));
                     // attributes
                     d.push_back(attributes);
                     // annotationtype
@@ -411,7 +456,7 @@ namespace {
         }
         // set restriction on category: number of children
         for (auto it = growntree.begin(); it != growntree.end(); it++)
-            if (it.number_of_children() > 200)
+            if (it.number_of_children() > CATEGORYMAXCHILDREN)
                 for (auto cit = it.begin(); cit != it.end(); cit++)
                     (*cit).second = (*it).second;
         //        // set restriction on category: must be in subsets

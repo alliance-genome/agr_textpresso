@@ -145,6 +145,7 @@ namespace {
         std::string id;
         std::string term;
         std::vector<std::string> synonyms;
+        std::vector<std::string> related_synonyms;
         std::vector<std::string> xref;
         std::string category(categoryname);
         std::string comment;
@@ -172,12 +173,14 @@ namespace {
                 seenterms.insert(term);
                 boost::erase_all(term, "\"");
             } else if (splits[0].compare("synonym:") == 0) {
-                if (in.find("EXACT") != std::string::npos) {
-                    std::vector<std::string> sp2;
-                    boost::split(sp2, in, boost::is_any_of("\""));
-                    if (seenterms.find(sp2[1]) == seenterms.end()) {
+                std::vector<std::string> sp2;
+                boost::split(sp2, in, boost::is_any_of("\""));
+                if (sp2.size() > 1 && seenterms.find(sp2[1]) == seenterms.end()) {
+                    seenterms.insert(sp2[1]);
+                    if (in.find("EXACT") != std::string::npos) {
                         synonyms.push_back(sp2[1]);
-                        seenterms.insert(sp2[1]);
+                    } else if (in.find("RELATED") != std::string::npos) {
+                        related_synonyms.push_back(sp2[1]);
                     }
                 }
             } else if (splits[0].compare("xref:") == 0) {
@@ -227,6 +230,33 @@ namespace {
                 d.push_back(alldbxref);
                 d.push_back(term);
                 d.push_back(category);
+                d.push_back(attributes);
+                d.push_back(annotationtype);
+                d.push_back(lexicalvariations);
+                d.push_back(curation_status);
+                d.push_back(curation_use);
+                d.push_back(comment);
+                d.push_back(owner);
+                d.push_back(source);
+                d.push_back(version);
+                std::stringstream ss;
+                ss << time(0);
+                d.push_back(ss.str());
+                tt.push_back(d);
+                ret++;
+            }
+        }
+        while (!related_synonyms.empty()) {
+            std::vector<std::string> d;
+            d.clear();
+            term = related_synonyms.back();
+            related_synonyms.pop_back();
+            if (term.length() > 1) { // only store terms with length of two or longer
+                std::string related_category = std::string("RELATED:") + category;
+                d.push_back(id);
+                d.push_back(alldbxref);
+                d.push_back(term);
+                d.push_back(related_category.substr(0, CATEGORYCOLUMNWIDTH));
                 d.push_back(attributes);
                 d.push_back(annotationtype);
                 d.push_back(lexicalvariations);
@@ -638,6 +668,7 @@ void TpOntApi::PopulateTpOntologyFromOboFile(const char * filename,
                 std::string id;
                 std::string term;
                 std::vector<std::string> synonyms;
+                std::vector<std::string> related_synonyms;
                 std::vector<std::string> xref;
                 std::string comment;
                 std::string curation_status("final");
@@ -662,12 +693,14 @@ void TpOntApi::PopulateTpOntologyFromOboFile(const char * filename,
                         seenterms.insert(term);
                         boost::erase_all(term, "\"");
                     } else if (splits[0].compare("synonym:") == 0) {
-                        if (datalines.back().find("EXACT") != std::string::npos) {
-                            std::vector<std::string> sp2;
-                            boost::split(sp2, datalines.back(), boost::is_any_of("\""));
-                            if (seenterms.find(sp2[1]) == seenterms.end()) {
+                        std::vector<std::string> sp2;
+                        boost::split(sp2, datalines.back(), boost::is_any_of("\""));
+                        if (sp2.size() > 1 && seenterms.find(sp2[1]) == seenterms.end()) {
+                            seenterms.insert(sp2[1]);
+                            if (datalines.back().find("EXACT") != std::string::npos) {
                                 synonyms.push_back(sp2[1]);
-                                seenterms.insert(sp2[1]);
+                            } else if (datalines.back().find("RELATED") != std::string::npos) {
+                                related_synonyms.push_back(sp2[1]);
                             }
                         }
                     } else if (splits[0].compare("xref:") == 0) {
@@ -715,6 +748,31 @@ void TpOntApi::PopulateTpOntologyFromOboFile(const char * filename,
                     d.push_back(alldbxref);
                     d.push_back(term);
                     d.push_back(category.substr(0, CATEGORYCOLUMNWIDTH));
+                    d.push_back(attributes);
+                    d.push_back(annotationtype);
+                    d.push_back(lexicalvariations);
+                    d.push_back(curation_status);
+                    d.push_back(curation_use);
+                    d.push_back(comment);
+                    d.push_back(owner);
+                    d.push_back(source);
+                    d.push_back(version);
+                    std::stringstream ss;
+                    ss << time(0);
+                    d.push_back(ss.str());
+                    tt.push_back(d);
+                    ct++;
+                }
+                while (!related_synonyms.empty()) {
+                    std::vector<std::string> d;
+                    d.clear();
+                    term = related_synonyms.back();
+                    related_synonyms.pop_back();
+                    std::string related_category = std::string("RELATED:") + category;
+                    d.push_back(id);
+                    d.push_back(alldbxref);
+                    d.push_back(term);
+                    d.push_back(related_category.substr(0, CATEGORYCOLUMNWIDTH));
                     d.push_back(attributes);
                     d.push_back(annotationtype);
                     d.push_back(lexicalvariations);
