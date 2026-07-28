@@ -231,6 +231,13 @@ def _process_entities_from_api(api_client: AGRCurationAPIClient, mod: str, entit
     current_page = 0
     found_synonyms: Set[str] = set()
 
+    # The db data source used for the gene fetch returns symbol-only records with no
+    # synonyms, so fetch synonyms separately from the API path and index them by
+    # primaryExternalId. They are merged onto the db genes in _process_single_entity.
+    gene_synonyms_map: dict[str, Any] = {}
+    if entity_type in ['gene', 'protein']:
+        gene_synonyms_map = _fetch_gene_synonyms_map(api_client, mod, taxon)
+
     while True:
         try:
             entities = _fetch_entities_page(api_client=api_client, mod=mod, entity_type=entity_type,
@@ -243,7 +250,8 @@ def _process_entities_from_api(api_client: AGRCurationAPIClient, mod: str, entit
                 if _should_skip_entity(entity):
                     continue
 
-                _process_single_entity(entity, entity_type, mod, entity_writer, synonym_writer, found_synonyms)
+                _process_single_entity(entity, entity_type, mod, entity_writer, synonym_writer,
+                                       found_synonyms, gene_synonyms_map)
 
             current_page += 1
             print(f"Page {current_page}: Entities: {entity_writer.records_count}, "
@@ -297,6 +305,60 @@ def _fetch_entities_page(api_client: AGRCurationAPIClient, mod: str, entity_type
         return api_client.get_agms(data_provider=mod, subtype="fish", limit=PAGE_LIMIT, page=page,
                                    updated_after=updated_after)
     return []
+
+
+def _get_entity_primary_id(entity: Any) -> Optional[str]:
+    """Return an entity's primary identifier (primaryExternalId, falling back to curie)."""
+    for attr in ('primaryExternalId', 'primary_external_id', 'curie'):
+        value = getattr(entity, attr, None)
+        if value:
+            return value
+    return None
+
+
+def _fetch_gene_synonyms_map(api_client: AGRCurationAPIClient, mod: str,
+                             taxon: Optional[str]) -> dict[str, Any]:
+    """
+    Build a {primaryExternalId: geneSynonyms} map from the REST API path.
+
+    The db data source used for the main gene fetch returns symbol-only records, so
+    synonyms have to come from the API path, which returns full gene records with
+    `geneSynonyms`. The API path also returns non-gene sequence features, but those
+    are harmless here: only genes from the db set are ever looked up in this map.
+    """
+    synonyms_map: dict[str, Any] = {}
+    page = 0
+    while True:
+        try:
+            genes = api_client.get_genes(
+                data_provider=mod,
+                taxon=taxon,
+                limit=PAGE_LIMIT,
+                page=page,
+                include_obsolete=False,
+                data_source='api'
+            )
+        except Exception as e:
+            print(f"Error fetching gene synonyms page {page}: {e}")
+            break
+
+        if not genes:
+            break
+
+        for gene in genes:
+            synonyms = getattr(gene, 'geneSynonyms', None) or getattr(gene, 'gene_synonyms', None)
+            if not synonyms:
+                continue
+            key = _get_entity_primary_id(gene)
+            if key:
+                synonyms_map[key] = synonyms
+
+        page += 1
+        if len(genes) < PAGE_LIMIT:
+            break
+
+    print(f"Fetched synonyms for {len(synonyms_map)} genes from API for {mod}")
+    return synonyms_map
 
 
 def _collect_updated_entities(api_client: AGRCurationAPIClient, mod: str, entity_type: str,
@@ -391,7 +453,8 @@ def _should_skip_entity(entity: Any) -> bool:
 def _process_single_entity(entity: Any, entity_type: str, mod: str,
                            entity_writer: '_EntityFileWriter',
                            synonym_writer: Optional['_EntityFileWriter'],
-                           found_synonyms: Set[str]) -> None:
+                           found_synonyms: Set[str],
+                           gene_synonyms_map: Optional[dict[str, Any]] = None) -> None:
     """Process a single entity and its synonyms."""
     # Process main entity based on entity type
     entity_symbol = None
@@ -421,6 +484,10 @@ def _process_single_entity(entity: Any, entity_type: str, mod: str,
             synonyms = entity.geneSynonyms
         elif hasattr(entity, 'gene_synonyms'):
             synonyms = entity.gene_synonyms
+        # The db data source omits synonyms; fall back to the API-derived map,
+        # keyed by primaryExternalId.
+        if not synonyms and gene_synonyms_map:
+            synonyms = gene_synonyms_map.get(_get_entity_primary_id(entity))
     elif entity_type == 'allele':
         if hasattr(entity, 'alleleSynonyms'):
             synonyms = entity.alleleSynonyms
