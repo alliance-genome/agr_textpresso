@@ -261,15 +261,11 @@ def _process_entities_from_api(api_client: AGRCurationAPIClient, mod: str, entit
     found_synonyms: Set[str] = set()
 
     # The db data source used for the gene fetch returns symbol-only records with no
-    # synonyms, so fetch synonyms separately from the API path and index them by
-    # primaryExternalId. They are merged onto the db genes in _process_single_entity.
-    # First collect the gene-type-filtered id set from the db so the API synonym scan
-    # can stop once every real gene has been seen, skipping the long tail of non-gene
-    # sequence features the API also returns.
-    gene_synonyms_map: dict[str, Any] = {}
+    # synonyms, so fetch synonyms with a single direct DB query (keyed by
+    # primaryExternalId) and merge them onto the db genes in _process_single_entity.
+    gene_synonyms_map: dict[str, list[str]] = {}
     if entity_type in ['gene', 'protein']:
-        gene_ids = _fetch_gene_ids(api_client, mod, taxon)
-        gene_synonyms_map = _fetch_gene_synonyms_map(api_client, mod, taxon, target_ids=gene_ids)
+        gene_synonyms_map = _fetch_gene_synonyms_map(api_client, mod, taxon)
 
     while True:
         try:
@@ -349,92 +345,58 @@ def _get_entity_primary_id(entity: Any) -> Optional[str]:
     return None
 
 
-def _fetch_gene_ids(api_client: AGRCurationAPIClient, mod: str,
-                    taxon: Optional[str]) -> Set[str]:
-    """
-    Return the set of gene primaryExternalIds from the db path.
-
-    The db path is SO gene-type filtered, so this is the set of real genes (excluding
-    the non-gene sequence features the REST API also returns). It lets the API synonym
-    scan stop early once every one of these genes has been seen.
-    """
-    gene_ids: Set[str] = set()
-    page = 0
-    while True:
-        genes = api_client.get_genes(
-            taxon=taxon,
-            limit=PAGE_LIMIT,
-            offset=page * PAGE_LIMIT,
-            include_obsolete=False,
-            data_source='db'
-        )
-        if not genes:
-            break
-        for gene in genes:
-            key = _get_entity_primary_id(gene)
-            if key:
-                gene_ids.add(key)
-        page += 1
-    return gene_ids
-
-
 def _fetch_gene_synonyms_map(api_client: AGRCurationAPIClient, mod: str,
-                             taxon: Optional[str],
-                             target_ids: Optional[Set[str]] = None) -> dict[str, Any]:
+                             taxon: Optional[str]) -> dict[str, list[str]]:
     """
-    Build a {primaryExternalId: geneSynonyms} map from the REST API path.
+    Build a {primaryExternalId: [synonym, ...]} map with a single direct DB query.
 
     The db data source used for the main gene fetch returns symbol-only records, so
-    synonyms have to come from the API path, which returns full gene records with
-    `geneSynonyms`. The API path also returns non-gene sequence features, but those
-    are harmless here: only genes from the db set are ever looked up in this map.
+    synonyms are fetched here straight from the persistent store via the client's DB
+    session (the GeneSynonymSlotAnnotation rows for this taxon). This is orders of
+    magnitude faster than paging the REST API, which enumerates the entire
+    biologicalentity set (~778k WB records including non-gene features) just to reach
+    the synonyms. Synonyms for non-gene features may come back too, but they are
+    harmless: only ids present in the db gene set are ever looked up in this map.
 
-    When `target_ids` (the db gene id set) is given, the scan stops as soon as every
-    one of those ids has appeared in the API stream, avoiding the long tail of
-    non-gene features. If some ids never appear, it falls back to a full scan
-    (terminated by an empty page).
+    Mirrors the GeneSymbolSlotAnnotation query the client's get_genes_by_taxon uses;
+    it only reads through the client, it does not modify it.
     """
-    synonyms_map: dict[str, Any] = {}
-    remaining = set(target_ids) if target_ids is not None else None
-    page = 0
-    while True:
-        try:
-            genes = api_client.get_genes(
-                data_provider=mod,
-                taxon=taxon,
-                limit=PAGE_LIMIT,
-                page=page,
-                include_obsolete=False,
-                data_source='api'
-            )
-        except Exception as e:
-            print(f"Error fetching gene synonyms page {page}: {e}")
-            break
+    from sqlalchemy import text
 
-        if not genes:
-            break
+    synonyms_map: dict[str, list[str]] = {}
+    if not taxon:
+        return synonyms_map
 
-        for gene in genes:
-            key = _get_entity_primary_id(gene)
-            if remaining is not None and key is not None:
-                remaining.discard(key)
-            synonyms = getattr(gene, 'geneSynonyms', None) or getattr(gene, 'gene_synonyms', None)
-            if not synonyms:
-                continue
-            if key:
-                synonyms_map[key] = synonyms
+    sql = text(
+        """
+        SELECT be.primaryexternalid AS primary_external_id,
+               slota.displaytext    AS synonym
+        FROM biologicalentity be
+            JOIN slotannotation slota ON be.id = slota.singlegene_id
+            JOIN ontologyterm taxon ON be.taxon_id = taxon.id
+        WHERE slota.obsolete = false
+          AND be.obsolete = false
+          AND be.internal = false
+          AND slota.slotannotationtype = 'GeneSynonymSlotAnnotation'
+          AND taxon.curie = :species_taxon
+        """
+    )
 
-        # The REST API filters obsolete records client-side, so a page can hold fewer
-        # than PAGE_LIMIT results while more pages remain. Keep paginating until an
-        # empty page is returned (checked at the top of the loop).
-        page += 1
+    session = None
+    try:
+        session = api_client._get_db_methods()._create_session()
+        rows = session.execute(sql, {"species_taxon": taxon}).fetchall()
+        for primary_external_id, synonym in rows:
+            if primary_external_id and synonym:
+                synonyms_map.setdefault(primary_external_id, []).append(synonym)
+    except Exception as e:
+        print(f"Error fetching gene synonyms from DB for {mod}: {e}")
+    finally:
+        if session is not None:
+            session.close()
 
-        # Early stop: once every db gene has appeared, all their synonyms are in hand;
-        # the rest of the API stream is non-gene features we don't need.
-        if remaining is not None and not remaining:
-            break
-
-    print(f"Fetched synonyms for {len(synonyms_map)} genes from API for {mod}")
+    total = sum(len(v) for v in synonyms_map.values())
+    print(f"Fetched {total} synonyms for {len(synonyms_map)} genes from DB for {mod}")
     return synonyms_map
 
 
@@ -608,7 +570,9 @@ def _process_single_entity(entity: Any, entity_type: str, mod: str,
 
     if synonyms:
         for synonym in synonyms:
-            synonym_name = get_name_from_entity(synonym)
+            # Gene synonyms from the DB map are plain strings; allele (and any
+            # object-shaped) synonyms are SlotAnnotation objects.
+            synonym_name = synonym if isinstance(synonym, str) else get_name_from_entity(synonym)
             if synonym_name and synonym_name not in found_synonyms:
                 found_synonyms.add(synonym_name)
                 formatted_synonym = _apply_mod_formatting(synonym_name, mod, entity_type)
