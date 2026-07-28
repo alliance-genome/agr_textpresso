@@ -263,9 +263,13 @@ def _process_entities_from_api(api_client: AGRCurationAPIClient, mod: str, entit
     # The db data source used for the gene fetch returns symbol-only records with no
     # synonyms, so fetch synonyms separately from the API path and index them by
     # primaryExternalId. They are merged onto the db genes in _process_single_entity.
+    # First collect the gene-type-filtered id set from the db so the API synonym scan
+    # can stop once every real gene has been seen, skipping the long tail of non-gene
+    # sequence features the API also returns.
     gene_synonyms_map: dict[str, Any] = {}
     if entity_type in ['gene', 'protein']:
-        gene_synonyms_map = _fetch_gene_synonyms_map(api_client, mod, taxon)
+        gene_ids = _fetch_gene_ids(api_client, mod, taxon)
+        gene_synonyms_map = _fetch_gene_synonyms_map(api_client, mod, taxon, target_ids=gene_ids)
 
     while True:
         try:
@@ -345,8 +349,38 @@ def _get_entity_primary_id(entity: Any) -> Optional[str]:
     return None
 
 
+def _fetch_gene_ids(api_client: AGRCurationAPIClient, mod: str,
+                    taxon: Optional[str]) -> Set[str]:
+    """
+    Return the set of gene primaryExternalIds from the db path.
+
+    The db path is SO gene-type filtered, so this is the set of real genes (excluding
+    the non-gene sequence features the REST API also returns). It lets the API synonym
+    scan stop early once every one of these genes has been seen.
+    """
+    gene_ids: Set[str] = set()
+    page = 0
+    while True:
+        genes = api_client.get_genes(
+            taxon=taxon,
+            limit=PAGE_LIMIT,
+            offset=page * PAGE_LIMIT,
+            include_obsolete=False,
+            data_source='db'
+        )
+        if not genes:
+            break
+        for gene in genes:
+            key = _get_entity_primary_id(gene)
+            if key:
+                gene_ids.add(key)
+        page += 1
+    return gene_ids
+
+
 def _fetch_gene_synonyms_map(api_client: AGRCurationAPIClient, mod: str,
-                             taxon: Optional[str]) -> dict[str, Any]:
+                             taxon: Optional[str],
+                             target_ids: Optional[Set[str]] = None) -> dict[str, Any]:
     """
     Build a {primaryExternalId: geneSynonyms} map from the REST API path.
 
@@ -354,8 +388,14 @@ def _fetch_gene_synonyms_map(api_client: AGRCurationAPIClient, mod: str,
     synonyms have to come from the API path, which returns full gene records with
     `geneSynonyms`. The API path also returns non-gene sequence features, but those
     are harmless here: only genes from the db set are ever looked up in this map.
+
+    When `target_ids` (the db gene id set) is given, the scan stops as soon as every
+    one of those ids has appeared in the API stream, avoiding the long tail of
+    non-gene features. If some ids never appear, it falls back to a full scan
+    (terminated by an empty page).
     """
     synonyms_map: dict[str, Any] = {}
+    remaining = set(target_ids) if target_ids is not None else None
     page = 0
     while True:
         try:
@@ -375,10 +415,12 @@ def _fetch_gene_synonyms_map(api_client: AGRCurationAPIClient, mod: str,
             break
 
         for gene in genes:
+            key = _get_entity_primary_id(gene)
+            if remaining is not None and key is not None:
+                remaining.discard(key)
             synonyms = getattr(gene, 'geneSynonyms', None) or getattr(gene, 'gene_synonyms', None)
             if not synonyms:
                 continue
-            key = _get_entity_primary_id(gene)
             if key:
                 synonyms_map[key] = synonyms
 
@@ -386,6 +428,11 @@ def _fetch_gene_synonyms_map(api_client: AGRCurationAPIClient, mod: str,
         # than PAGE_LIMIT results while more pages remain. Keep paginating until an
         # empty page is returned (checked at the top of the loop).
         page += 1
+
+        # Early stop: once every db gene has appeared, all their synonyms are in hand;
+        # the rest of the API stream is non-gene features we don't need.
+        if remaining is not None and not remaining:
+            break
 
     print(f"Fetched synonyms for {len(synonyms_map)} genes from API for {mod}")
     return synonyms_map
