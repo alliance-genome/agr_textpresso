@@ -382,9 +382,10 @@ def _fetch_gene_synonyms_map(api_client: AGRCurationAPIClient, mod: str,
             if key:
                 synonyms_map[key] = synonyms
 
+        # The REST API filters obsolete records client-side, so a page can hold fewer
+        # than PAGE_LIMIT results while more pages remain. Keep paginating until an
+        # empty page is returned (checked at the top of the loop).
         page += 1
-        if len(genes) < PAGE_LIMIT:
-            break
 
     print(f"Fetched synonyms for {len(synonyms_map)} genes from API for {mod}")
     return synonyms_map
@@ -465,8 +466,8 @@ def _collect_updated_entities(api_client: AGRCurationAPIClient, mod: str, entity
                   f"New synonyms: {len(new_synonyms) if new_synonyms is not None else 0}, "
                   f"Obsolete synonyms: {len(obsolete_synonyms) if obsolete_synonyms is not None else 0}")
 
-            if len(entities) < PAGE_LIMIT:
-                break
+            # The REST API filters obsolete records client-side, so a short page does
+            # not signal the end; keep going until an empty page (checked at the top).
 
         except Exception as e:
             print(f"Error fetching page {current_page}: {e}")
