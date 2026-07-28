@@ -263,15 +263,24 @@ def _fetch_entities_page(api_client: AGRCurationAPIClient, mod: str, entity_type
                          taxon: str = None) -> list[Any]:
     """Fetch a single page of entities from the API."""
     if entity_type in ['gene', 'protein']:
-        # Use the REST API explicitly. GraphQL isn't serving a schema on this
-        # deployment (404), and the db->graphql->api fallback can't be used here:
-        # passing a taxon enables the client's db path, which paginates by
-        # `offset` while this loop advances `page`, so it returns the same first
-        # page forever (duplicate genes, never terminating). The REST API
-        # paginates by `page` (which we advance), applies the taxon/data_provider
-        # filters, and returns full gene records.
-        return api_client.get_genes(data_provider=mod, limit=PAGE_LIMIT, page=page, updated_after=updated_after,
-                                    include_obsolete=True, taxon=taxon, data_source="api")
+        # Use the DB data source, translating this loop's `page` counter into the
+        # `offset` the db path paginates by (offset = page * PAGE_LIMIT). This
+        # mirrors the WB allele db call below and returns gene records (SO
+        # gene-type filtered, so non-gene sequence features are excluded) for
+        # every MOD that generates genes (WB, MGI, ZFIN, FB, SGD).
+        #
+        # `taxon` is required by the db path and is what it filters on
+        # (data_provider and updated_after are ignored there). `include_obsolete`
+        # is False so obsolete genes are excluded at the source and never reach
+        # the output files. The 2-month date filtering for the incremental update
+        # path is applied client-side in _collect_updated_entities.
+        return api_client.get_genes(
+            taxon=taxon,
+            limit=PAGE_LIMIT,
+            offset=page * PAGE_LIMIT,
+            include_obsolete=False,
+            data_source='db'
+        )
     elif entity_type == 'allele':
         # WB extraction subset: force DB + correct params
         if mod == 'WB':
