@@ -175,6 +175,10 @@ def update_entity_list_from_ateam_api(mod: str, entity_type: str) -> None:
     Update existing entity list files with recent changes using AGRCurationAPIClient.
     Only processes entities updated in the last 2 months.
 
+    For genes, synonyms are updated too: WB synonym changes are applied to the
+    separate gene_synonym file, and other MODs' synonym changes are applied to the
+    main gene file (mirroring the full-generation routing).
+
     Args:
         mod: Model organism database (e.g., 'WB', 'MGI')
         entity_type: Type of entity to process ('gene', 'allele', 'fish')
@@ -182,17 +186,29 @@ def update_entity_list_from_ateam_api(mod: str, entity_type: str) -> None:
     id_prefix, species_name, filename_id = get_id_prefix_species_name(mod)
     api_client = _create_api_client()
 
-    # Collect recently updated entities
+    # Collect recently updated entities (and, for genes, their synonyms)
     new_entities: Set[str] = set()
     obsolete_entities: Set[str] = set()
+    new_synonyms: Set[str] = set()
+    obsolete_synonyms: Set[str] = set()
 
     try:
-        _collect_updated_entities(api_client, mod, entity_type, new_entities, obsolete_entities)
+        _collect_updated_entities(api_client, mod, entity_type, new_entities, obsolete_entities,
+                                  new_synonyms, obsolete_synonyms)
     except Exception as e:
         print(f"Error collecting updated entities: {e}")
         return
 
-    if len(new_entities) == 0 and len(obsolete_entities) == 0:
+    # WB keeps gene synonyms in a separate file; every other MOD folds them into
+    # the main gene file (mirrors the full-generation routing).
+    wb_separate_synonyms = mod == 'WB' and entity_type == 'gene'
+    if entity_type in ('gene', 'protein') and not wb_separate_synonyms:
+        new_entities |= new_synonyms
+        obsolete_entities |= obsolete_synonyms
+        new_synonyms.clear()
+        obsolete_synonyms.clear()
+
+    if not (new_entities or obsolete_entities or new_synonyms or obsolete_synonyms):
         print(f"No updated {entity_type} entities found for {mod}")
         return
 
@@ -200,12 +216,25 @@ def update_entity_list_from_ateam_api(mod: str, entity_type: str) -> None:
     entity_list_file = f"{entity_type}_{filename_id}.obo"
     curr_entity_list_file = f"/data/textpresso/obofiles4production/{entity_list_file}"
 
-    try:
-        process_entities(curr_entity_list_file, entity_list_file, new_entities, obsolete_entities,
-                         entity_type, id_prefix, species_name)
-        print(f"Updated {entity_list_file}: {len(new_entities)} new, {len(obsolete_entities)} obsolete")
-    except Exception as e:
-        print(f"Error updating entity file: {e}")
+    if new_entities or obsolete_entities:
+        try:
+            process_entities(curr_entity_list_file, entity_list_file, new_entities, obsolete_entities,
+                             entity_type, id_prefix, species_name)
+            print(f"Updated {entity_list_file}: {len(new_entities)} new, {len(obsolete_entities)} obsolete")
+        except Exception as e:
+            print(f"Error updating entity file: {e}")
+
+    # WB: apply gene synonym changes to the separate gene_synonym file.
+    if wb_separate_synonyms and (new_synonyms or obsolete_synonyms):
+        synonym_type = f"{entity_type}_synonym"
+        synonym_file = f"{synonym_type}_{filename_id}.obo"
+        curr_synonym_file = f"/data/textpresso/obofiles4production/{synonym_file}"
+        try:
+            process_entities(curr_synonym_file, synonym_file, new_synonyms, obsolete_synonyms,
+                             synonym_type, id_prefix, species_name)
+            print(f"Updated {synonym_file}: {len(new_synonyms)} new, {len(obsolete_synonyms)} obsolete")
+        except Exception as e:
+            print(f"Error updating synonym file: {e}")
 
 
 def _create_api_client() -> AGRCurationAPIClient:
@@ -231,6 +260,13 @@ def _process_entities_from_api(api_client: AGRCurationAPIClient, mod: str, entit
     current_page = 0
     found_synonyms: Set[str] = set()
 
+    # The db data source used for the gene fetch returns symbol-only records with no
+    # synonyms, so fetch synonyms with a single direct DB query (keyed by
+    # primaryExternalId) and merge them onto the db genes in _process_single_entity.
+    gene_synonyms_map: dict[str, list[str]] = {}
+    if entity_type in ['gene', 'protein']:
+        gene_synonyms_map = _fetch_gene_synonyms_map(api_client, mod, taxon)
+
     while True:
         try:
             entities = _fetch_entities_page(api_client=api_client, mod=mod, entity_type=entity_type,
@@ -243,7 +279,8 @@ def _process_entities_from_api(api_client: AGRCurationAPIClient, mod: str, entit
                 if _should_skip_entity(entity):
                     continue
 
-                _process_single_entity(entity, entity_type, mod, entity_writer, synonym_writer, found_synonyms)
+                _process_single_entity(entity, entity_type, mod, entity_writer, synonym_writer,
+                                       found_synonyms, gene_synonyms_map)
 
             current_page += 1
             print(f"Page {current_page}: Entities: {entity_writer.records_count}, "
@@ -263,15 +300,24 @@ def _fetch_entities_page(api_client: AGRCurationAPIClient, mod: str, entity_type
                          taxon: str = None) -> list[Any]:
     """Fetch a single page of entities from the API."""
     if entity_type in ['gene', 'protein']:
-        # Use the REST API explicitly. GraphQL isn't serving a schema on this
-        # deployment (404), and the db->graphql->api fallback can't be used here:
-        # passing a taxon enables the client's db path, which paginates by
-        # `offset` while this loop advances `page`, so it returns the same first
-        # page forever (duplicate genes, never terminating). The REST API
-        # paginates by `page` (which we advance), applies the taxon/data_provider
-        # filters, and returns full gene records.
-        return api_client.get_genes(data_provider=mod, limit=PAGE_LIMIT, page=page, updated_after=updated_after,
-                                    include_obsolete=True, taxon=taxon, data_source="api")
+        # Use the DB data source, translating this loop's `page` counter into the
+        # `offset` the db path paginates by (offset = page * PAGE_LIMIT). This
+        # mirrors the WB allele db call below and returns gene records (SO
+        # gene-type filtered, so non-gene sequence features are excluded) for
+        # every MOD that generates genes (WB, MGI, ZFIN, FB, SGD).
+        #
+        # `taxon` is required by the db path and is what it filters on
+        # (data_provider and updated_after are ignored there). `include_obsolete`
+        # is False so obsolete genes are excluded at the source and never reach
+        # the output files. The 2-month date filtering for the incremental update
+        # path is applied client-side in _collect_updated_entities.
+        return api_client.get_genes(
+            taxon=taxon,
+            limit=PAGE_LIMIT,
+            offset=page * PAGE_LIMIT,
+            include_obsolete=False,
+            data_source='db'
+        )
     elif entity_type == 'allele':
         # WB extraction subset: force DB + correct params
         if mod == 'WB':
@@ -290,14 +336,84 @@ def _fetch_entities_page(api_client: AGRCurationAPIClient, mod: str, entity_type
     return []
 
 
+def _get_entity_primary_id(entity: Any) -> Optional[str]:
+    """Return an entity's primary identifier (primaryExternalId, falling back to curie)."""
+    for attr in ('primaryExternalId', 'primary_external_id', 'curie'):
+        value = getattr(entity, attr, None)
+        if value:
+            return value
+    return None
+
+
+def _fetch_gene_synonyms_map(api_client: AGRCurationAPIClient, mod: str,
+                             taxon: Optional[str]) -> dict[str, list[str]]:
+    """
+    Build a {primaryExternalId: [synonym, ...]} map with a single direct DB query.
+
+    The db data source used for the main gene fetch returns symbol-only records, so
+    synonyms are fetched here straight from the persistent store via the client's DB
+    session (the GeneSynonymSlotAnnotation rows for this taxon). This is orders of
+    magnitude faster than paging the REST API, which enumerates the entire
+    biologicalentity set (~778k WB records including non-gene features) just to reach
+    the synonyms. Synonyms for non-gene features may come back too, but they are
+    harmless: only ids present in the db gene set are ever looked up in this map.
+
+    Mirrors the GeneSymbolSlotAnnotation query the client's get_genes_by_taxon uses;
+    it only reads through the client, it does not modify it.
+    """
+    from sqlalchemy import text
+
+    synonyms_map: dict[str, list[str]] = {}
+    if not taxon:
+        return synonyms_map
+
+    sql = text(
+        """
+        SELECT be.primaryexternalid AS primary_external_id,
+               slota.displaytext    AS synonym
+        FROM biologicalentity be
+            JOIN slotannotation slota ON be.id = slota.singlegene_id
+            JOIN ontologyterm taxon ON be.taxon_id = taxon.id
+        WHERE slota.obsolete = false
+          AND be.obsolete = false
+          AND be.internal = false
+          AND slota.slotannotationtype = 'GeneSynonymSlotAnnotation'
+          AND taxon.curie = :species_taxon
+        """
+    )
+
+    session = None
+    try:
+        session = api_client._get_db_methods()._create_session()
+        rows = session.execute(sql, {"species_taxon": taxon}).fetchall()
+        for primary_external_id, synonym in rows:
+            if primary_external_id and synonym:
+                synonyms_map.setdefault(primary_external_id, []).append(synonym)
+    except Exception as e:
+        print(f"Error fetching gene synonyms from DB for {mod}: {e}")
+    finally:
+        if session is not None:
+            session.close()
+
+    total = sum(len(v) for v in synonyms_map.values())
+    print(f"Fetched {total} synonyms for {len(synonyms_map)} genes from DB for {mod}")
+    return synonyms_map
+
+
 def _collect_updated_entities(api_client: AGRCurationAPIClient, mod: str, entity_type: str,
-                              new_entities: Set[str], obsolete_entities: Set[str]) -> None:
+                              new_entities: Set[str], obsolete_entities: Set[str],
+                              new_synonyms: Optional[Set[str]] = None,
+                              obsolete_synonyms: Optional[Set[str]] = None) -> None:
     """
     Collect recently updated entities (within last 2 months) from the API.
 
-    Note: This function currently fetches all entities as the AGRCurationAPIClient
-    doesn't support sorting by dbDateUpdated yet. This should be enhanced when
-    the client library supports date-based filtering or sorting.
+    For genes/proteins this uses the REST API path rather than the symbol-only db
+    path used for full generation: the API path supports `updated_after` and returns
+    both date fields and `geneSynonyms`, which the db path does not. Gene synonyms are
+    collected into new_synonyms/obsolete_synonyms when those sets are provided.
+
+    Note: obsolete/new is decided per record; a record flagged obsolete or internal
+    contributes its name (and synonyms) to the obsolete sets so they are removed.
     """
     current_page = 0
     records_processed = 0
@@ -308,8 +424,21 @@ def _collect_updated_entities(api_client: AGRCurationAPIClient, mod: str, entity
 
     while True:
         try:
-            entities = _fetch_entities_page(api_client=api_client, mod=mod, entity_type=entity_type, page=current_page,
-                                            updated_after=date_two_months_ago, taxon=MOD_TAXON_MAPPING.get(mod))
+            if entity_type in ('gene', 'protein'):
+                # API path: supports updated_after and returns synonyms + date fields.
+                entities = api_client.get_genes(
+                    data_provider=mod,
+                    taxon=MOD_TAXON_MAPPING.get(mod),
+                    limit=PAGE_LIMIT,
+                    page=current_page,
+                    updated_after=date_two_months_ago,
+                    include_obsolete=True,
+                    data_source='api'
+                )
+            else:
+                entities = _fetch_entities_page(api_client=api_client, mod=mod, entity_type=entity_type,
+                                                page=current_page, updated_after=date_two_months_ago,
+                                                taxon=MOD_TAXON_MAPPING.get(mod))
             if not entities:
                 break
 
@@ -327,24 +456,27 @@ def _collect_updated_entities(api_client: AGRCurationAPIClient, mod: str, entity
 
                 records_processed += 1
 
-                # Check if entity should be skipped (obsolete or internal)
-                if _should_skip_entity(entity):
-                    entity_name = _get_entity_name_from_api_entity(entity, entity_type, mod)
-                    if entity_name:
-                        obsolete_entities.add(entity_name)
-                    continue
+                # Obsolete/internal records feed the removal sets; others feed the add sets.
+                is_obsolete = _should_skip_entity(entity)
 
-                # Get entity name
                 entity_name = _get_entity_name_from_api_entity(entity, entity_type, mod)
                 if entity_name:
-                    new_entities.add(entity_name)
+                    (obsolete_entities if is_obsolete else new_entities).add(entity_name)
+
+                # Collect gene synonyms when requested
+                if entity_type in ('gene', 'protein') and new_synonyms is not None \
+                        and obsolete_synonyms is not None:
+                    for synonym_name in _get_gene_synonym_names(entity, mod):
+                        (obsolete_synonyms if is_obsolete else new_synonyms).add(synonym_name)
 
             current_page += 1
             print(f"Page {current_page}: Processed {records_processed} entities, "
-                  f"New: {len(new_entities)}, Obsolete: {len(obsolete_entities)}")
+                  f"New: {len(new_entities)}, Obsolete: {len(obsolete_entities)}, "
+                  f"New synonyms: {len(new_synonyms) if new_synonyms is not None else 0}, "
+                  f"Obsolete synonyms: {len(obsolete_synonyms) if obsolete_synonyms is not None else 0}")
 
-            if len(entities) < PAGE_LIMIT:
-                break
+            # The REST API filters obsolete records client-side, so a short page does
+            # not signal the end; keep going until an empty page (checked at the top).
 
         except Exception as e:
             print(f"Error fetching page {current_page}: {e}")
@@ -356,7 +488,7 @@ def _get_entity_name_from_api_entity(entity: Any, entity_type: str, mod: str) ->
     entity_name = None
 
     if entity_type == 'gene':
-        entity_symbol = getattr(entity, 'gene_symbol', None)
+        entity_symbol = getattr(entity, 'geneSymbol', None) or getattr(entity, 'gene_symbol', None)
         entity_name = get_name_from_entity(entity_symbol)
         if entity_name and mod == 'WB':
             entity_name = entity_name.lower()
@@ -373,6 +505,18 @@ def _get_entity_name_from_api_entity(entity: Any, entity_type: str, mod: str) ->
     return entity_name
 
 
+def _get_gene_synonym_names(entity: Any, mod: str) -> list[str]:
+    """Extract formatted gene synonym names from an API gene entity."""
+    synonyms = getattr(entity, 'geneSynonyms', None) or getattr(entity, 'gene_synonyms', None)
+    names: list[str] = []
+    if synonyms:
+        for synonym in synonyms:
+            synonym_name = get_name_from_entity(synonym)
+            if synonym_name:
+                names.append(_apply_mod_formatting(synonym_name, mod, 'gene'))
+    return names
+
+
 def _should_skip_entity(entity: Any) -> bool:
     """Check if entity should be skipped (obsolete or internal)."""
     return ((hasattr(entity, 'obsolete') and entity.obsolete) or
@@ -382,7 +526,8 @@ def _should_skip_entity(entity: Any) -> bool:
 def _process_single_entity(entity: Any, entity_type: str, mod: str,
                            entity_writer: '_EntityFileWriter',
                            synonym_writer: Optional['_EntityFileWriter'],
-                           found_synonyms: Set[str]) -> None:
+                           found_synonyms: Set[str],
+                           gene_synonyms_map: Optional[dict[str, Any]] = None) -> None:
     """Process a single entity and its synonyms."""
     # Process main entity based on entity type
     entity_symbol = None
@@ -412,6 +557,10 @@ def _process_single_entity(entity: Any, entity_type: str, mod: str,
             synonyms = entity.geneSynonyms
         elif hasattr(entity, 'gene_synonyms'):
             synonyms = entity.gene_synonyms
+        # The db data source omits synonyms; fall back to the API-derived map,
+        # keyed by primaryExternalId.
+        if not synonyms and gene_synonyms_map:
+            synonyms = gene_synonyms_map.get(_get_entity_primary_id(entity))
     elif entity_type == 'allele':
         if hasattr(entity, 'alleleSynonyms'):
             synonyms = entity.alleleSynonyms
@@ -421,7 +570,9 @@ def _process_single_entity(entity: Any, entity_type: str, mod: str,
 
     if synonyms:
         for synonym in synonyms:
-            synonym_name = get_name_from_entity(synonym)
+            # Gene synonyms from the DB map are plain strings; allele (and any
+            # object-shaped) synonyms are SlotAnnotation objects.
+            synonym_name = synonym if isinstance(synonym, str) else get_name_from_entity(synonym)
             if synonym_name and synonym_name not in found_synonyms:
                 found_synonyms.add(synonym_name)
                 formatted_synonym = _apply_mod_formatting(synonym_name, mod, entity_type)
