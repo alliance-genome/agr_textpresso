@@ -556,8 +556,10 @@ void IndexManager::update_document_details(DocumentDetails &doc_details, String 
     } else if (field == L"corpus") {
         String literature = doc_ptr->get(StringUtils::toString("corpus"));
         string raw_lit = string(literature.begin(), literature.end());
-        raw_lit = raw_lit.substr(2, raw_lit.length() - 4);
-        boost::split_regex(doc_details.corpora, raw_lit, boost::regex("ED BG"));
+        if (raw_lit.length() >= 4) {
+            raw_lit = raw_lit.substr(2, raw_lit.length() - 4);
+            boost::split_regex(doc_details.corpora, raw_lit, boost::regex("ED BG"));
+        }
     } else if (field == L"fulltext_compressed") {
         doc_details.fulltext = "";
     } else if (field == L"type_compressed") {

@@ -33,9 +33,31 @@ Endpoints:
       ?q=<free-text query, e.g. "seed">
       &ontology=PO                       (repeatable; default: all)
       &limit=20                          (default 20, capped at 100)
+      &relationship_type=is_a            (repeatable; default: none -- literal
+                                           match only. When given, each match's
+                                           descendants along the named OBO
+                                           relationship(s) -- e.g. is_a, part_of,
+                                           regulates -- are included too.)
+      &ancestor_relationship_type=is_a   (repeatable; mirrors relationship_type
+                                           but walks upward -- each match's
+                                           ancestors/parent terms along the
+                                           named relationship(s) are included
+                                           too. Combine both params to expand
+                                           in both directions at once.)
 
-    200 -> {"query": "...", "matches": [{"id","name","category","ontology","matched_on"}, ...]}
+    200 -> {"query": "...", "matches": [{"id","name","category","ontology","matched_on",
+             "relationship_types","parent_relationship_types"}, ...]}
     400 -> {"error": "..."}  (missing q)
+
+    Each match's "relationship_types" lists the OBO relationship types (e.g.
+    ["is_a", "part_of"]) that actually have children under that term in the
+    indexed OBO files -- i.e. the values &relationship_type=... would need to
+    return anything for that specific term. "parent_relationship_types" is the
+    mirror: the relationship types that have a parent above that term, i.e.
+    what &ancestor_relationship_type=... would need to return anything. There's
+    no fixed list of relationship types across GO/PO/TO (see category_index.py),
+    so these are how a client discovers, per term and per direction, what's
+    available to expand with, without guessing.
 """
 
 import json
@@ -121,12 +143,16 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         ontology_filter = set(qs.get("ontology") or ()) or None
+        relationship_types = set(qs.get("relationship_type") or ()) or None
+        ancestor_relationship_types = set(qs.get("ancestor_relationship_type") or ()) or None
         try:
             limit = min(int((qs.get("limit") or ["20"])[0]), 100)
         except ValueError:
             limit = 20
 
-        matches = category_index.search(_CATEGORY_INDEX, query, ontology_filter, limit)
+        matches = category_index.search(
+            _CATEGORY_INDEX, query, ontology_filter, limit, relationship_types,
+            ancestor_relationship_types)
         self._send_json(200, {"query": query, "matches": matches})
 
 

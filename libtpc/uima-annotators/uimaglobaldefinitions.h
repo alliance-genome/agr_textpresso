@@ -150,7 +150,18 @@ inline const std::set<UnicodeString>& sectionMaterialsMethods() {
         "M a t e r i a l s   a n d   m e t h o d s\n",
         "Experimental Procedures\n", "E x p e r i m e n t a l   P r o c e d u r e s\n",
         "EXPERIMENTAL PROCEDURES\n", "E X P E R I M E N T A L   P R O C E D U R E S\n",
-        "experimental procedures\n", "Experimental procedures\n"
+        "experimental procedures\n", "Experimental procedures\n",
+        // added 2026-08-14: classic Nature "Article" format ("Methods Summary")
+        // and the Nature Genetics/Nature Methods "Online Methods" convention --
+        // found while auditing zero-section SorghumBase papers; neither was in
+        // the original synonym set despite being common, consistent headings
+        // across that journal family, not one-off formatting quirks.
+        "Methods Summary\n", "M e t h o d s   S u m m a r y\n",
+        "METHODS SUMMARY\n", "M E T H O D S   S U M M A R Y\n",
+        "methods summary\n", "Methods summary\n",
+        "Online Methods\n", "O n l i n e   M e t h o d s\n",
+        "ONLINE METHODS\n", "O N L I N E   M E T H O D S\n",
+        "online methods\n", "Online methods\n"
     };
     return *values;
 }

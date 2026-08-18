@@ -191,6 +191,115 @@ UnicodeString CleanPdfTagsForSectionSearch(const UnicodeString & src,
     return cleaned;
 }
 
+// Some journals' articles print their bibliography as a bare numbered
+// list with no "References" (or any other registered synonym) heading
+// text anywhere in the document -- no literal-string trie match can ever
+// find a heading that was never printed, so this scans for the numbered-
+// list pattern itself as a fallback signal. Added 2026-08-14 after
+// auditing a batch of SorghumBase zero-section papers and finding several
+// genuinely well-structured papers permanently blocked on this exact
+// case; generalized the same day after the first version (position-gated
+// to the back half of the document, format-gated to "N. Author..." all on
+// one line) turned out to miss a second real variant: modern Nature-family
+// papers that place references right after the main text (as little as
+// ~25% through the document, followed by the full Methods and dozens of
+// pages of Extended Data figures) and whose text extraction sometimes
+// splits the citation number onto its own line, separate from the author
+// name ("2.\nRich-Griffin, C. et al...." rather than "2. Rich-Griffin, C.
+// et al....").
+//
+// Per-match pattern: newline, 1-3 digits, '.', then whitespace (spaces/
+// tabs, or up to one newline to cover the split-line case above), then an
+// uppercase letter -- the start of an author surname. Position is no
+// longer used as a filter (references can legitimately sit anywhere from
+// roughly a quarter of the way through a modern paper to the very end of
+// an older one) -- instead, each candidate match must be followed within
+// a short window by a parenthesized 4-digit year, "(2006)"/"(2020)" style,
+// which is close to universal for a real citation and essentially never
+// occurs in an unrelated numbered list (protocol steps, supplementary
+// item lists). This is a stronger and more format-independent signal than
+// position ever was.
+//
+// Because position is no longer a filter, matches are then clustered by
+// proximity (kMaxGap) and only the largest tight cluster is used, ending
+// shortly after its own last entry -- not "run to End of Article" -- so a
+// modern paper's references don't swallow the many unrelated pages of
+// Methods and Extended Data that typically follow them.
+//
+// Operates on the same PDF-tag-cleaned buffer the heading trie searches
+// (CleanPdfTagsForSectionSearch above), for the same reason that cleanup
+// exists: a marker sitting between the newline and the digits would
+// otherwise break the match. Returns [-1,-1] (in the cleaned buffer's own
+// coordinates -- the caller maps back through posmap) if no qualifying
+// span was found.
+pair<int32_t, int32_t> DetectImplicitReferencesSpan(const UnicodeString & cleaned) {
+    static const size_t kMinMatches = 5;
+    static const int32_t kYearWindow = 400;   // chars to look ahead for "(YYYY)"
+    static const int32_t kMaxGap = 600;       // chars between entries before a cluster breaks
+    static const int32_t kTrailingBuffer = 500; // chars kept past the last entry in a cluster
+    int32_t len = cleaned.length();
+    vector<int32_t> matchPositions;
+    for (int32_t i = 0; i < len - 3; i++) {
+        if (cleaned.charAt(i) != (UChar) '\n') continue;
+        int32_t j = i + 1;
+        int32_t numStart = j;
+        while (j < len && (j - numStart) < 3 &&
+                cleaned.charAt(j) >= (UChar) '0' && cleaned.charAt(j) <= (UChar) '9') j++;
+        if (j == numStart) continue; // no digits right after the newline
+        if (j >= len || cleaned.charAt(j) != (UChar) '.') continue;
+        j++;
+        int32_t wsStart = j;
+        int32_t newlineCount = 0;
+        while (j < len && newlineCount <= 1 &&
+                (cleaned.charAt(j) == (UChar) ' ' || cleaned.charAt(j) == (UChar) '\t' ||
+                 cleaned.charAt(j) == (UChar) '\n')) {
+            if (cleaned.charAt(j) == (UChar) '\n') newlineCount++;
+            j++;
+        }
+        if (j == wsStart) continue; // require whitespace (or one newline) right after the period
+        if (j >= len || cleaned.charAt(j) < (UChar) 'A' || cleaned.charAt(j) > (UChar) 'Z') continue;
+        // require a parenthesized 4-digit year within the next kYearWindow
+        // characters -- the real per-entry bibliography signal, now doing
+        // the work position used to do.
+        bool hasYear = false;
+        int32_t scanEnd = min(j + kYearWindow, len - 6);
+        for (int32_t k = j; k < scanEnd; k++) {
+            if (cleaned.charAt(k) != (UChar) '(') continue;
+            bool allDigits = true;
+            for (int32_t d = 1; d <= 4; d++)
+                if (cleaned.charAt(k + d) < (UChar) '0' || cleaned.charAt(k + d) > (UChar) '9')
+                    allDigits = false;
+            if (allDigits && cleaned.charAt(k + 5) == (UChar) ')') { hasYear = true; break; }
+        }
+        if (!hasYear) continue;
+        matchPositions.push_back(i + 1); // position of the digit itself
+    }
+    if (matchPositions.size() < kMinMatches) return make_pair(-1, -1);
+    // cluster by proximity; keep only the largest tight cluster, so an
+    // isolated qualifying match far from the real bibliography (a false
+    // positive that individually passed the year check) can't drag the
+    // span out or get chosen over the real list.
+    vector< pair<int32_t, int32_t> > clusters; // [firstIdx, lastIdx] into matchPositions
+    size_t clusterStart = 0;
+    for (size_t k = 1; k <= matchPositions.size(); k++) {
+        if (k == matchPositions.size() || matchPositions[k] - matchPositions[k - 1] > kMaxGap) {
+            clusters.push_back(make_pair((int32_t) clusterStart, (int32_t) (k - 1)));
+            clusterStart = k;
+        }
+    }
+    size_t bestCluster = 0;
+    size_t bestSize = 0;
+    for (size_t c = 0; c < clusters.size(); c++) {
+        size_t sz = clusters[c].second - clusters[c].first + 1;
+        if (sz > bestSize) { bestSize = sz; bestCluster = c; }
+    }
+    if (bestSize < kMinMatches) return make_pair(-1, -1);
+    int32_t spanBegin = matchPositions[clusters[bestCluster].first];
+    int32_t lastMatch = matchPositions[clusters[bestCluster].second];
+    int32_t spanEnd = min(lastMatch + kTrailingBuffer, len);
+    return make_pair(spanBegin, spanEnd);
+}
+
 bool TdTokenizer::hasSection(const set<UnicodeString>& sectionNames,
         const vector<UnicodeString>& sections) {
     bool ret = false;
@@ -505,13 +614,32 @@ TyErrorId TdTokenizer::process(CAS & tcas, ResultSpecification const & crResultS
     bool hasMM(hasSection(tp_uima_globals::sectionMaterialsMethods(), sections));
     bool hasDesign(hasSection(tp_uima_globals::sectionDesign(), sections));
     bool hasReferences(hasSection(tp_uima_globals::sectionReferences(), sections));
+    // 2026-08-14: fall back to detecting a heading-less numbered reference
+    // list (see DetectImplicitReferencesSpan above) when the trie found no
+    // "References"-family heading at all.
+    pair<int32_t, int32_t> implicitRefSpan(-1, -1);
+    if (!hasReferences) {
+        pair<int32_t, int32_t> cleanedSpan = DetectImplicitReferencesSpan(dstForSections);
+        if (cleanedSpan.first >= 0) {
+            int32_t endIdx = min(cleanedSpan.second, (int32_t) sectionPosMap.size() - 1);
+            implicitRefSpan = make_pair(sectionPosMap[cleanedSpan.first], sectionPosMap[endIdx]);
+            hasReferences = true;
+        }
+    }
     int score(0);
     if (hasIntroduction || hasBackground) score++;
     if (hasDiscussion || hasConclusion) score++;
     if (hasResult) score++;
     if (hasMM || hasDesign) score++;
     if (hasReferences) score++;
-    if (score > 3) {
+    // Threshold lowered 2026-08-14: >3 (4-of-5 categories) suppressed
+    // section detection for 65% of a sampled 81-paper zero-section set
+    // (score 2-3, one/two categories short), even when categories that
+    // did match (typically references + one other) were correct. >1
+    // still requires 2 independently-matched categories, guarding against
+    // a single spurious isolated-line match, while recovering the
+    // majority of legitimately-structured papers the old threshold blocked.
+    if (score > 1) {
         combineSectionAnnotations(tcas, tp_uima_globals::sectionArticleB(), sections,
                 sectionsB, sectionsE, "beginning of article", ac);
         combineSectionAnnotations(tcas, tp_uima_globals::sectionArticleE(), sections,
@@ -536,6 +664,17 @@ TyErrorId TdTokenizer::process(CAS & tcas, ResultSpecification const & crResultS
                 sectionsB, sectionsE, "acknowledgments", ac);
         combineSectionAnnotations(tcas, tp_uima_globals::sectionReferences(), sections,
                 sectionsB, sectionsE, "references", ac);
+        if (implicitRefSpan.first >= 0 && implicitRefSpan.second > implicitRefSpan.first) {
+            FSIndexRepository & indexRepImplicit = tcas.getIndexRepository();
+            AnnotationFS fsImplicitRef = tcas.createAnnotation(sectiontype_,
+                    implicitRefSpan.first, implicitRefSpan.second);
+            fsImplicitRef.setStringValue(sectiontype_type_, "references");
+            fsImplicitRef.setStringValue(sectiontype_content_,
+                    UnicodeString("(implicit: numbered-list reference block, no heading text found)"));
+            Feature faidImplicit = sectiontype_.getFeatureByBaseName("aid");
+            if (faidImplicit.isValid()) fsImplicitRef.setIntValue(faidImplicit, ac.GetNextId());
+            indexRepImplicit.addFS(fsImplicitRef);
+        }
     }
     FSIndexRepository & indexRep = tcas.getIndexRepository();
     AnnotationFS fsNewTok = tcas.createAnnotation(tpfnvhashtype_, 0, usdocref.length());

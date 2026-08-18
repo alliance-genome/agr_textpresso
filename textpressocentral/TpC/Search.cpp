@@ -1589,7 +1589,7 @@ void Search::getAllResults(std::vector< std::vector < std::wstring> >& contents)
         //
         vector<DocumentDetails> docsDetails = indexManager_.get_documents_details(
                 searchResults_.hit_documents, cb_year_->isChecked(), false,
-                {"filepath", "year", "doc_id"}, SENTENCE_FIELDS_DETAILED, {
+                {"filepath", "year", "doc_id", "corpus"}, SENTENCE_FIELDS_DETAILED, {
                     "fulltext_compressed", "fulltext_cat_compressed"
                 },
         {
@@ -1746,7 +1746,7 @@ void Search::displayTable(int start, int end, int direction) {
     set<string> fields_to_exclude;
     vector<DocumentDetails> docsDetails = indexManager_.get_documents_details(
             doc_summaries, cb_year_->isChecked(), false,
-            {"filepath", "year", "doc_id"}, SENTENCE_FIELDS_DETAILED, {
+            {"filepath", "year", "doc_id", "corpus"}, SENTENCE_FIELDS_DETAILED, {
                 "fulltext_compressed", "fulltext_cat_compressed"
             },
     {
