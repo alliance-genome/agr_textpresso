@@ -3,6 +3,9 @@ version: "3.7"
 services:
   textpresso:
       restart: always
+      # run Docker's init as PID 1 so exited processes (e.g. the textpressoapi restarted by
+      # 12index.sh) are reaped instead of staying as zombies
+      init: true
       build:
         context: .
         dockerfile: Dockerfile
