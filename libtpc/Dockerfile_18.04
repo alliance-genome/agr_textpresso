@@ -25,8 +25,12 @@ COPY ./patches/uimacpp-2.4.0/src/framework/uima/strtools.hpp /uimacpp-2.4.0/src/
 COPY ./patches/uimacpp-2.4.0/configure.ac /uimacpp-2.4.0/
 
 ## compile and install uima library
-RUN cd uimacpp-2.4.0; autoconf -i; chmod +x configure; ./configure --without-activemq \
---with-jdk="/usr/lib/jvm/java-11-openjdk-amd64/include -I/usr/lib/jvm/java-11-openjdk-amd64/include/linux" \
+# uimacpp 2.4.0 ships a config.guess/config.sub that predates aarch64, so use automake's current ones;
+# the JDK directory is per-architecture (java-11-openjdk-amd64 / -arm64), so derive it from javac
+RUN apt-get -y install automake && cd uimacpp-2.4.0; autoconf -i; \
+for f in $(find . -name config.guess -o -name config.sub); do cp /usr/share/automake-*/$(basename $f) $f; done; \
+JDK=$(dirname $(dirname $(readlink -f $(which javac)))); chmod +x configure; ./configure --without-activemq \
+--with-jdk="$JDK/include -I$JDK/include/linux" \
 --with-icu=/usr --enable-static --enable-shared --prefix=/usr/local && make -j8 && make install && rm -rf /uimacpp-2.4.0
 
 # compile and install wt - the version provided by ubuntu is bugged!

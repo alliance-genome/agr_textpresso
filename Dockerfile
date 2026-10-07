@@ -26,6 +26,9 @@ RUN git clone https://github.com/ipkn/crow.git
 RUN git clone https://github.com/SRombauts/SQLiteCpp.git; cd SQLiteCpp; git checkout 3.3.1; mkdir cmake-build-release; cd cmake-build-release; cmake ..; make -j 8; make install; rm -rf /SQLiteCpp
 
 # Precompile system
+# cas2index, indexmerger, updatecorpuscounter and getbib use pthread symbols without linking it;
+# x86 tolerates that, aarch64 fails with "DSO missing from command line"
+ENV LDFLAGS=-pthread
 COPY textpressocentral /data/textpresso/textpressocentral
 COPY textpressoapi /data/textpresso/textpressoapi
 COPY tpctools /data/textpresso/tpctools
@@ -43,7 +46,7 @@ RUN mkdir -p etc
 COPY stopwords.postgres.tar.gz /usr/local/textpresso/etc/.
 WORKDIR /
 
-RUN wget -q https://repo.anaconda.com/miniconda/Miniconda3-py311_25.5.1-0-Linux-x86_64.sh && bash Miniconda3-py311_25.5.1-0-Linux-x86_64.sh -b && rm Miniconda3-py311_25.5.1-0-Linux-x86_64.sh
+RUN MINICONDA=Miniconda3-py311_25.5.1-0-Linux-$(uname -m).sh && wget -q https://repo.anaconda.com/miniconda/${MINICONDA} && bash ${MINICONDA} -b && rm ${MINICONDA}
 ENV PATH="${PATH}:/root/miniconda3/bin"
 RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
 RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
