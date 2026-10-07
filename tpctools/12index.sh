@@ -101,5 +101,16 @@ else
 	mv "${INDEX_DIR}" "${INDEX_DIR}.bk"
 	mv ${INDEX_DIR_CUR} ${INDEX_DIR}
     fi
+    # textpressoapi opens the Lucene readers once and never reopens them, so a running API keeps
+    # serving the previous index after the swap above. Restart it (same command as initialize.sh)
+    # so it loads the new one. The website opens the index per session and needs no restart.
+    if pgrep -x textpressoapi > /dev/null
+    then
+	echo "Restarting textpressoapi to load the new index ..."
+	pkill -x textpressoapi
+	# wait for it to exit; the container's PID 1 does not reap children, so ignore zombies
+	for i in $(seq 1 30); do ps -C textpressoapi -o stat= | grep -qv '^Z' || break; sleep 1; done
+	nohup textpressoapi -d /data/textpresso/textpressoapi_data/tokens.db &>/data/textpresso/textpressoapi_data/api.log &
+    fi
     rm ${LOCKFILE}
 fi
