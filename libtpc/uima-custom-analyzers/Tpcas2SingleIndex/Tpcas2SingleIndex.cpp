@@ -503,12 +503,8 @@ wstring getCatString(map<wstring, vector < wstring>> cat_map, wstring w_cleanTex
         else
             ret += L"NA\t";
     ret = ret.substr(0, ret.length() - 1);
-    vector<wstring> cats;
-    boost::split(cats, ret, boost::is_any_of("\t"));
-    cout << "N(cats) = " << cats.size() << endl;
-    cout << "N(words) = " << words.size() << endl;
-    for (size_t i = 0; i < words.size(); i++)
-        wcout << words[i] << L" " << cats[i] << endl;
+    // A per-word debug dump used to be printed here; it made cas2index write
+    // 100-160 GB of logs to /tmp/csi.*.out on every index build.
     return ret;
 }
 
