@@ -13,4 +13,6 @@ oboheaderfiles/*
 pgdumps/*
 postgres/*
 tracking/*
-.dockerignore
+.dockerignoreluceneindex.bk/*
+raw_files_past_week/*
+*_new_*
