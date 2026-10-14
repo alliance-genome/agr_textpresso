@@ -17,6 +17,8 @@
 #include <boost/filesystem.hpp>
 #include <boost/algorithm/string/regex.hpp>
 
+#include <algorithm>
+#include <cwchar>
 #include <iostream>
 #include <fstream>
 #include <unicode/regex.h>
@@ -355,7 +357,12 @@ vector<String> Tpcas2SingleIndex::GetBib(string fullfilename) {
         boost::replace_all(content, "\377", "");
         boost::replace_all(content, "\\377", "");
         String content_conv = StringUtils::toString(content.c_str());
-        boost::replace_all(content_conv, "\377", "");
+        // toString widens every non-ASCII byte to WEOF (0xFFFFFFFF), which Lucene++ cannot encode as UTF-8:
+        // CompressionTools::compressString then stores the whole field as an empty string, and reading it back
+        // segfaults in decompressString. Drop those code units explicitly. The narrow "\377" literal used to do
+        // this only where char is signed (x86); on aarch64 it widens to 0xFF and matches nothing.
+        content_conv.erase(std::remove(content_conv.begin(), content_conv.end(), static_cast<wchar_t>(WEOF)),
+                content_conv.end());
         boost::replace_all(content_conv, "\\377", "");
         // Process str
         if (field == "author") {
