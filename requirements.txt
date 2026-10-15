@@ -7,3 +7,7 @@ urllib3==1.26.15
 python-dateutil
 
 agr-curation-api-client==0.14.0
+# pulled in by agr-curation-api-client; newer linkml-runtime requires pyoxigraph>=0.5.11, which has no
+# aarch64 wheel and does not build with the image's gcc 7 (needs -std=c++20)
+linkml==1.11.1
+linkml-runtime==1.11.1
