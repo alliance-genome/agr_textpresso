@@ -107,6 +107,14 @@ empty_cas2="$(find "${STAGE_CAS2}" -maxdepth 3 -type f -name "*.tpcas.gz" -exec 
 echo "${LOG_PREFIX} Empty CAS-1 count: ${empty_cas1}"
 echo "${LOG_PREFIX} Empty CAS-2 count: ${empty_cas2}"
 
+# Totals and the list of new papers, for the report sent by send_report.py
+total_cas1="$(find "${STAGE_CAS1}" -maxdepth 3 -type f -name "*.tpcas.gz" | wc -l | tr -d ' ')"
+total_cas2="$(find "${STAGE_CAS2}" -maxdepth 3 -type f -name "*.tpcas.gz" | wc -l | tr -d ' ')"
+echo "${LOG_PREFIX} Total new CAS-1 count: ${total_cas1}"
+echo "${LOG_PREFIX} Total new CAS-2 count: ${total_cas2}"
+find "${STAGE_CAS2}" -maxdepth 3 -type f -name "*.tpcas.gz" -printf "%f\n" | sed 's/\.tpcas\.gz$//' | sort |
+  while read -r paper; do echo "${LOG_PREFIX} New paper: ${paper}"; done
+
 # If you want to hard-fail on empties, uncomment:
 # if [[ "${empty_cas2}" -gt 0 ]]; then
 #   echo "${LOG_PREFIX} ERROR: Found empty CAS-2 files (${empty_cas2}). Aborting before syncing to main dirs."
