@@ -784,23 +784,27 @@ void IndexManager::create_index_from_existing_cas_dir(const string &input_cas_di
     TmpConf tmp_conf = TmpConf();
     recursive_directory_iterator it_end;
     for (recursive_directory_iterator dir_it(input_cas_dir_path); dir_it != it_end; ++dir_it) {
-        if (counter_cas_files % max_num_papers_per_subindex == 0 && first_paper == false) {
-            // create new subindex
-            subindex_dir = out_dir + "_" + to_string(counter_cas_files / max_num_papers_per_subindex);
-            tmp_conf = write_tmp_conf_files(subindex_dir);
-            first_paper = true;
-            if (!exists(tmp_conf.new_index_flag)) {
-                std::ofstream f_newindexflag(tmp_conf.new_index_flag.c_str());
-                f_newindexflag << "newindexflag";
-                f_newindexflag.close();
-            }
-            create_subindex_dir_structure(subindex_dir);
-        }
         string file_id = dir_it->path().parent_path().parent_path().filename().string()
                 + "/" + dir_it->path().parent_path().filename().string();
         if (is_regular_file(dir_it->status()) && boost::algorithm::ends_with(
                 dir_it->path().filename().string(), ".tpcas.gz") && (file_list.empty() ||
                 file_list.find(file_id) != file_list.end())) {
+            // Start a new subindex only when there is a paper to put in it. Checking this on every directory
+            // entry created an empty subindex as soon as a subindex was full, e.g. subindex_1 when the file
+            // list holds exactly max_num_papers_per_subindex papers, as create_single_index.sh does. The empty
+            // subindex has no segments.gen, get_subreaders returns a null reader for it, and
+            // update_corpus_counter then segfaults in the MultiReader constructor.
+            if (counter_cas_files % max_num_papers_per_subindex == 0 && first_paper == false) {
+                subindex_dir = out_dir + "_" + to_string(counter_cas_files / max_num_papers_per_subindex);
+                tmp_conf = write_tmp_conf_files(subindex_dir);
+                first_paper = true;
+                if (!exists(tmp_conf.new_index_flag)) {
+                    std::ofstream f_newindexflag(tmp_conf.new_index_flag.c_str());
+                    f_newindexflag << "newindexflag";
+                    f_newindexflag.close();
+                }
+                create_subindex_dir_structure(subindex_dir);
+            }
             std::string filepath(dir_it->path().string());
             if (!process_single_file(filepath, first_paper, tmp_conf)) {
                 continue;
